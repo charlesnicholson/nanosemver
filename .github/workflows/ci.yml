@@ -241,12 +241,19 @@ jobs:
         run: make size
       - name: Size budget, and nothing from libc or libgcc but memcpy
         run: make size-check
+      # checkout trusts the workspace only for its own git calls; the container's user
+      # does not own it, so `git show origin/main:...` needs the exception too.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # bash, for pipefail: a failed make must not hide behind tee.
       - name: Cortex-M instruction counts against main
         continue-on-error: true
+        shell: bash
         run: |
           { echo '### Cortex-M, emulated'; echo '```'; make -s bench-cm; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Host timings against main
         continue-on-error: true
+        shell: bash
         run: |
           { echo '### Host, gcc -O2'; echo '```'; make -s bench CC=gcc CXX=g++ BENCH_ARGS=--quick; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
 
