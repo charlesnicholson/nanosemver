@@ -128,7 +128,7 @@ char const *check_parsed(nsv_semver_t const &v, ref::version const &rv, char con
 
 char const *check_one(char const *p, size_t n, nsv_semver_t *v, ref::version *rv,
                       bool *parsed) {
-  nsv_semver_t out;
+  nsv_semver_t out{};
   unsigned char before[sizeof(out)];
   std::memset(&out, 0xA5, sizeof(out));
   std::memcpy(before, &out, sizeof(out));
@@ -160,7 +160,7 @@ char const *check(std::uint8_t const *data, std::size_t size) {
   // Each string sits against its own guard page, so an over-read faults.
   char const *const pa = ga.place(a);
   char const *const pb = gb.place(b);
-  nsv_semver_t va, vb;
+  nsv_semver_t va{}, vb{};
   ref::version ra, rb;
   bool oka = false, okb = false;
   if (char const *f = check_one(pa, a.size(), &va, &ra, &oka)) {

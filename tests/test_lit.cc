@@ -43,7 +43,7 @@ TEST_CASE("NSV_SEMVER_LIT: the documented round-trip check") {
   char buf[64];
   int const n = nsv_format(buf, sizeof(buf), &k_stamp);
   REQUIRE(n > 0);
-  nsv_semver_t v;
+  nsv_semver_t v{};
   REQUIRE(nsv_parse(&v, buf, static_cast<size_t>(n)) == NSV_RET_OK);
   REQUIRE(nsv_cmp(&v, &k_stamp) == NSV_CMP_EQ);
 

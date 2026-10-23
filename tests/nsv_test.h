@@ -17,13 +17,13 @@ namespace nsv_test {
 // Parses s, which sits against a guard page so any over-read faults.
 inline int parse_rc(std::string_view s) {
   static guarded g;
-  nsv_semver_t v;
+  nsv_semver_t v{};
   return nsv_parse(&v, g.place(s), s.size());
 }
 
 // Parses s or fails the test. The view points into s, which must outlive it.
 inline nsv_semver_t parse_ok(std::string const &s) {
-  nsv_semver_t v;
+  nsv_semver_t v{};
   INFO("parsing \"", s, "\"");
   REQUIRE(nsv_parse(&v, s.data(), s.size()) == NSV_RET_OK);
   return v;

@@ -25,7 +25,7 @@ std::string with_byte(char const *prefix, int c, char const *suffix) {
 }  // namespace
 
 TEST_CASE("nsv_parse: NULL arguments") {
-  nsv_semver_t v;
+  nsv_semver_t v{};
   REQUIRE(nsv_parse(nullptr, "1.2.3", 5) == NSV_RET_ERR_ARG);
   REQUIRE(nsv_parse(&v, nullptr, 5) == NSV_RET_ERR_ARG);
   REQUIRE(nsv_parse(&v, nullptr, 0) == NSV_RET_ERR_ARG);
@@ -298,14 +298,14 @@ TEST_CASE("nsv_parse: only len bytes are read") {
 
   SUBCASE("a prefix of a longer buffer") {
     std::string const s = "1.2.3-rc.1 and then some";
-    nsv_semver_t v;
+    nsv_semver_t v{};
     REQUIRE(nsv_parse(&v, s.data(), 10) == NSV_RET_OK);
     REQUIRE(nsv_test::pre(v) == "rc.1");
     REQUIRE(nsv_parse(&v, s.data(), 11) == NSV_RET_ERR_SYNTAX);
   }
 
   SUBCASE("zero length") {
-    nsv_semver_t v;
+    nsv_semver_t v{};
     REQUIRE(nsv_parse(&v, "1.2.3", 0) == NSV_RET_ERR_SYNTAX);
   }
 
@@ -376,7 +376,7 @@ TEST_CASE("nsv_parse: the 65535-byte limit") {
 }
 
 TEST_CASE("nsv_parse: *out is untouched on error") {
-  nsv_semver_t v;
+  nsv_semver_t v{};
   unsigned char before[sizeof(v)];
   std::memset(&v, 0xA5, sizeof(v));
   std::memcpy(before, &v, sizeof(v));
@@ -393,7 +393,7 @@ TEST_CASE("nsv_parse: *out is untouched on error") {
 }
 
 TEST_CASE("nsv_parse: overwrites every field on success") {
-  nsv_semver_t v;
+  nsv_semver_t v{};
   std::memset(&v, 0xA5, sizeof(v));
   std::string const s = "1.2.3";
   REQUIRE(nsv_parse(&v, s.data(), s.size()) == NSV_RET_OK);

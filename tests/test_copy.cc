@@ -184,7 +184,7 @@ TEST_CASE("nsv_copy: writes exactly the bytes it reports") {
 
 TEST_CASE("nsv_copy: into a static wrapper struct, as the header documents") {
   static struct {
-    nsv_semver_t v;
+    nsv_semver_t v{};
     char strs[64];
   } g_ver;
   std::string const s = "2.0.0-rc.3+exp";
