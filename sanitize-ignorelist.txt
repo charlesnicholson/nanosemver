@@ -1,0 +1,14 @@
+# MemorySanitizer needs every byte it sees produced by instrumented code, and the
+# test harness links an uninstrumented libstdc++. These are the standard library
+# templates doctest instantiates, never nanosemver.c.
+[memory]
+src:*/stl_tree.h
+src:*/ostream
+src:*/ostream.h
+src:*/iomanip
+src:*/basic_string.h
+# std::regex and its locale plumbing, in tests/test_ref.cc.
+src:*/bits/regex*
+src:*/bits/locale*
+# doctest's own -tse/-tc argument parser reads uninitialized memory.
+fun:*parseCommaSepArgs*
