@@ -42,22 +42,29 @@ std::string alnum(rng &r, std::uint32_t n) {
   return s;
 }
 
+// Hashes and timestamps, longer than any word list or short alnum.
+std::string long_ident(rng &r) {
+  return r.chance(50) ? alnum(r, 9 + r.below(40)) : digits(r, 9 + r.below(20), r.chance(50));
+}
+
 std::string pre_ident(rng &r) {
   static char const *const words[] = { "alpha", "beta", "rc", "a", "b", "A", "-", "x-y" };
-  switch (r.below(10)) {
+  switch (r.below(11)) {
     case 0: return "0";
     case 1: return "0" + digits(r, 1 + r.below(2), true);  // leading zero: invalid
     case 2: return digits(r, 1 + r.below(25), false);      // numeric, any width
     case 3: return words[r.below(8)];
     case 4: return r.chance(20) ? "" : "0" + alnum(r, 1 + r.below(3));
+    case 5: return long_ident(r);
     default: return alnum(r, 1 + r.below(8));
   }
 }
 
 std::string build_ident(rng &r) {
-  switch (r.below(4)) {
+  switch (r.below(5)) {
     case 0: return digits(r, 1 + r.below(6), true);  // leading zeros are fine here
     case 1: return r.chance(10) ? "" : "sha";
+    case 2: return long_ident(r);
     default: return alnum(r, 1 + r.below(8));
   }
 }

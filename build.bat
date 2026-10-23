@@ -5,8 +5,9 @@ cd /d "%~dp0"
 REM nanosemver with MSVC. Run from a Developer Command Prompt, or after vcvars32.bat /
 REM vcvars64.bat; the target architecture is whatever that environment sets up.
 REM
-REM   build.bat         build and run the unit tests, as configured and with
-REM                     -DNSV_INT_MAX=32767 (the checks a 16-bit int needs)
+REM   build.bat         build and run the unit tests, as configured and as for a small
+REM                     MCU: -DNSV_INT_MAX=32767 (the checks a 16-bit int needs) and
+REM                     division by shifts
 REM   build.bat fuzz    then run the standalone fuzz driver (FUZZ_ARGS, default -t 30)
 REM   build.bat clean   delete build\ except the envy package cache
 REM
@@ -29,7 +30,7 @@ set "CFLAGS=/nologo /W4 /WX /std:c11 /O1 /Z7 /I."
 set "CXXFLAGS=/nologo /W4 /WX /EHsc /std:c++20 /permissive- /O1 /Z7 /I. /external:W0 /external:I "%DOCTEST_DIR%""
 
 call :unit unit "" "" || exit /b 1
-call :unit int16 "/DNSV_INT_MAX=32767" "tests\int16\test_int16.cc" || exit /b 1
+call :unit int16 "/DNSV_INT_MAX=32767 /DNSV_SOFT_DIV=1" "tests\int16\test_int16.cc" || exit /b 1
 
 set "DIR=%OUT%\fuzz"
 if not exist %DIR% mkdir %DIR%
