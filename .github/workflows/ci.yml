@@ -1,0 +1,290 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+    # A release is tag-driven: the whole matrix runs against the tag, and only if it
+    # passes does the release job publish.
+    tags: [ 'v*' ]
+  schedule:
+    - cron: '0 2 * * 0'  # weekly
+  workflow_dispatch:
+
+# Supersede a pull request's earlier runs when it is pushed to again. head_ref is only
+# set for pull requests, so pushes, tags and the cron fall through to run_id, get a
+# group to themselves, and are never cancelled: a tag push has to reach the release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  # The workflow and release plumbing: the checked-in header stays unversioned, the
+  # script that stamps it works, and the gate below waits on every job.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: all-checks-pass needs every job
+        run: |
+          wf=.github/workflows/ci.yml
+          diff <(yq -r '.jobs | keys | .[]' "$wf" | grep -vx -e all-checks-pass -e release | sort) \
+               <(yq -r '.jobs["all-checks-pass"].needs[]' "$wf" | sort)
+      - name: Placeholder intact
+        run: ./release.sh --check
+      - name: Dry run
+        run: |
+          test "$(./release.sh v0.0.0-ci.1 build/release)" = prerelease
+          head -1 build/release/nanosemver.h | grep -q '^/\* nanosemver v0.0.0-ci.1:'
+          unzip -l build/release/nanosemver-v0.0.0-ci.1.zip
+          unzip -p build/release/nanosemver-v0.0.0-ci.1.zip nanosemver-v0.0.0-ci.1/nanosemver.h \
+            | cmp - build/release/nanosemver.h
+          unzip -l build/release/nanosemver-v0.0.0-ci.1.zip | grep -q 'tests/test_parse.cc'
+          cat build/release/release_notes.md
+
+  linux:
+    name: linux (${{ matrix.cc }}, ${{ matrix.cfg }}, ${{ matrix.arch }}-bit)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+        cfg: [ Release, Debug ]
+        arch: [ 32, 64 ]
+        include:
+          - { cc: gcc, cxx: g++ }
+          - { cc: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Build and test
+        run: make -j"$(nproc)" CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} CFG=${{ matrix.cfg }} ARCH=${{ matrix.arch }}
+
+  linux-arm64:
+    name: linux-arm64 (${{ matrix.cc }})
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+        include:
+          - { cc: gcc, cxx: g++ }
+          - { cc: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Build and test
+        run: make -j"$(nproc)" CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+
+  sanitizers:
+    name: sanitizer (${{ matrix.cc }}, ${{ matrix.san }})
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: clang, cxx: clang++, san: 'address,undefined' }
+          - { cc: clang, cxx: clang++, san: memory }
+          - { cc: gcc, cxx: g++, san: 'address,undefined' }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Build and test
+        run: make -j"$(nproc)" CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} SAN=${{ matrix.san }}
+
+  coverage:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: 100% of nanosemver.c, in both int configurations
+        run: make -j"$(nproc)" CC=clang CXX=clang++ coverage
+      - name: Annotated source
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: build/coverage/*.txt
+          if-no-files-found: ignore
+
+  fuzz:
+    name: fuzz (${{ matrix.kind }})
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: libFuzzer
+            run: make CC=clang CXX=clang++ libfuzzer LIBFUZZER_ARGS=-max_total_time=120
+          - kind: standalone, asan+ubsan
+            run: make CC=clang CXX=clang++ SAN=address,undefined fuzz FUZZ_ARGS="-t 120"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Fuzz
+        run: ${{ matrix.run }} -j"$(nproc)"
+      - name: Keep any crash
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crash
+          path: |
+            crash-*
+            build/libfuzzer/corpus
+          if-no-files-found: ignore
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Build and test
+        run: make -j"$(sysctl -n hw.ncpu)"
+      - name: Build and test (asan+ubsan)
+        run: make -j"$(sysctl -n hw.ncpu)" SAN=address,undefined
+
+  windows:
+    name: windows (msvc, ${{ matrix.arch }}-bit)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ 32, 64 ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Build and test
+        shell: cmd
+        env:
+          FUZZ_ARGS: -t 30
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo Could not locate a Visual Studio installation via vswhere 1>&2
+            exit /b 1
+          )
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars${{ matrix.arch }}.bat" || exit /b 1
+          call build.bat fuzz
+
+  # The DOCTEST_H opt-out: no container, no envy, the runner's own compilers.
+  without-envy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: doctest.h
+        run: |
+          mkdir -p "${RUNNER_TEMP}/doctest"
+          curl -fsSL -o "${RUNNER_TEMP}/doctest/doctest.h" \
+            https://raw.githubusercontent.com/doctest/doctest/v2.5.3/doctest/doctest.h
+      - name: Build and test
+        run: make -j"$(nproc)" DOCTEST_H="${RUNNER_TEMP}/doctest/doctest.h"
+      - name: envy was never invoked
+        run: test ! -d build/envy-cache
+
+  # The one required status check. always(), so it reports even when a job it needs
+  # fails; otherwise it would be skipped, and a skipped required check reads as passing.
+  # Nothing above is skipped on purpose, so a skip is a failure too. The lint job
+  # checks that this list names every job.
+  all-checks-pass:
+    needs: [ lint, linux, linux-arm64, sanitizers, coverage, fuzz, macos, windows,
+             without-envy ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - if: >-
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled') ||
+          contains(needs.*.result, 'skipped')
+        run: echo "A required job did not pass." && exit 1
+      - run: echo Done
+
+  # An if: without a status function implies success(), so this runs only after
+  # all-checks-pass succeeds.
+  release:
+    needs: [ all-checks-pass ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Stamps the tag into the header, zips it with the rest of the source, and writes
+      # the asset notes. Run it locally to see exactly what a tag would ship.
+      - name: Prepare the release assets
+        id: assets
+        run: echo "kind=$(./release.sh "${GITHUB_REF_NAME}" build/release)" >> "$GITHUB_OUTPUT"
+
+      # Idempotent, so a re-run after a partial failure still completes. A tag with a
+      # pre-release (v1.2.0-rc.1) is published as a GitHub pre-release. The asset notes
+      # go first; GitHub's list of merged pull requests follows.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ steps.assets.outputs.kind == 'prerelease' && '--prerelease' || '' }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "release ${GITHUB_REF_NAME} already exists"
+            exit 0
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --notes-file build/release/release_notes.md \
+            --generate-notes \
+            ${PRERELEASE:+"$PRERELEASE"} \
+            "build/release/nanosemver-${GITHUB_REF_NAME}.zip" \
+            build/release/nanosemver.h \
+            build/release/nanosemver.c
