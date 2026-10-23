@@ -217,6 +217,39 @@ jobs:
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars${{ matrix.arch }}.bat" || exit /b 1
           call build.bat fuzz
 
+  # Cortex-M code size against size-budget.mk, then the benchmarks against main: the
+  # emulated Cortex-M instruction counts are exact, the host timings a shared runner's.
+  # Neither benchmark gates: a deliberate behavior change makes their checksums differ.
+  embedded:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the benchmarks build origin/main's nanosemver.c
+      - uses: actions/cache@v6
+        with:
+          path: |
+            build/envy-cache
+            build/uv-cache
+          key: embedded-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua', 'bench/cm/cmcount.py') }}
+      - name: Code size
+        run: make size
+      - name: Size budget, and nothing from libc or libgcc but memcpy
+        run: make size-check
+      - name: Cortex-M instruction counts against main
+        continue-on-error: true
+        run: |
+          { echo '### Cortex-M, emulated'; echo '```'; make -s bench-cm; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Host timings against main
+        continue-on-error: true
+        run: |
+          { echo '### Host, gcc -O2'; echo '```'; make -s bench CC=gcc CXX=g++ BENCH_ARGS=--quick; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+
   # The DOCTEST_H opt-out: no container, no envy, the runner's own compilers.
   without-envy:
     runs-on: ubuntu-latest
@@ -238,7 +271,7 @@ jobs:
   # checks that this list names every job.
   all-checks-pass:
     needs: [ lint, linux, linux-arm64, sanitizers, coverage, fuzz, macos, windows,
-             without-envy ]
+             embedded, without-envy ]
     if: always()
     runs-on: ubuntu-latest
     steps:

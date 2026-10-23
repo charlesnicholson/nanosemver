@@ -11,6 +11,37 @@
 #define NSV_INT_MAX INT_MAX
 #endif
 
+/* Where v / 10 is a library call, nsv_format divides by shifts and adds instead:
+   Cortex-M0/M0+/M1 (ARMv6-M), AVR, MSP430 and RISC-V without M. Elsewhere a multiply
+   does it faster. */
+#ifndef NSV_SOFT_DIV
+#if defined(__ARM_ARCH_6M__) || defined(__AVR__) || defined(__MSP430__) || \
+    (defined(__riscv) && !defined(__riscv_div))
+#define NSV_SOFT_DIV 1
+#else
+#define NSV_SOFT_DIV 0
+#endif
+#endif
+
+/* NSV_NOINLINE keeps a rarer path's code and register pressure out of its caller.
+   NSV_INLINE inlines a hot helper into its callers when optimizing for speed, where
+   compilers otherwise decide differently with every small change; under -Os the
+   compiler chooses, and out of line is also faster on register-starved Thumb-1. */
+#if defined(__GNUC__)
+#define NSV_NOINLINE __attribute__((noinline))
+#ifdef __OPTIMIZE_SIZE__
+#define NSV_INLINE
+#else
+#define NSV_INLINE __inline__ __attribute__((always_inline))
+#endif
+#elif defined(_MSC_VER)
+#define NSV_NOINLINE __declspec(noinline)
+#define NSV_INLINE __forceinline
+#else
+#define NSV_NOINLINE
+#define NSV_INLINE
+#endif
+
 /* C99 has no alignof; a struct pads its second member out to that member's alignment. */
 typedef struct {
   char c;
@@ -21,99 +52,86 @@ static int nsv_is_digit(char c) {
   return ((unsigned)(unsigned char)c - '0') < 10u;
 }
 
-/* [0-9A-Za-z-] */
-static int nsv_is_ident(char c) {
-  unsigned const u = (unsigned char)c;
-  return ((u - '0') < 10u) || (((u | 0x20u) - 'a') < 26u) || (u == '-');
-}
-
-/* s[i], or NUL past the end. Callers only compare the result against '.', '-', '+'. */
-static char nsv_peek(char const *s, size_t n, size_t i) {
-  return (i < n) ? s[i] : '\0';
-}
-
-/* Scans a numeric identifier, "0" or [1-9][0-9]*, into *v and sets *ovf if it exceeds
-   UINT32_MAX. A leading zero ends the scan after the '0', so the caller's next
-   expectation fails. Returns the index past it, or 0 if s[i] is not a digit. */
-static size_t nsv_scan_num(char const *s, size_t n, size_t i, uint32_t *v, int *ovf) {
-  uint32_t x = 0;
-  if ((i == n) || !nsv_is_digit(s[i])) {
-    return 0;
-  }
-  if (s[i] == '0') {
-    ++i;
-  } else {
-    do {
-      uint32_t const d = (uint32_t)(unsigned char)s[i] - '0';
-      if (x > ((UINT32_MAX - d) / 10u)) {
-        *ovf = 1;
-      } else {
-        x = (x * 10u) + d;
-      }
-    } while ((++i < n) && nsv_is_digit(s[i]));
-  }
-  *v = x;
-  return i;
-}
-
-/* Scans dot-separated identifiers of [0-9A-Za-z-]. With no_leading_zero, all-digit
-   identifiers must be "0" or start with [1-9] (pre-release rule). Returns the index
-   past the last identifier, or 0 on an empty identifier or a leading zero. */
-static size_t nsv_scan_ids(char const *s, size_t n, size_t i, int no_leading_zero) {
+/* Scans dot-separated identifiers of [0-9A-Za-z-] in [p, e). With pre, all-digit
+   identifiers must be "0" or start with [1-9] (the pre-release rule). Returns the end
+   of the last identifier, or NULL on an empty identifier or a leading zero. */
+static NSV_INLINE char const *nsv_scan_ids(char const *p, char const *e, unsigned pre) {
   for (;;) {
-    size_t const b = i;
-    int digits = 1;
-    while ((i < n) && nsv_is_ident(s[i])) {
-      digits &= nsv_is_digit(s[i]);
-      ++i;
+    char const *const b = p;
+    unsigned alpha = 0;
+    for (; p != e; ++p) {
+      unsigned const c = (unsigned char)*p;
+      if ((c - '0') >= 10u) {
+        if ((((c | 0x20u) - 'a') >= 26u) && (c != '-')) {
+          break;
+        }
+        alpha = 1;
+      }
     }
-    if ((i == b) || (no_leading_zero && digits && (s[b] == '0') && ((i - b) > 1u))) {
-      return 0;
+    if ((p == b) || (pre && !alpha && (*b == '0') && ((p - b) > 1))) {
+      return NULL;
     }
-    if (nsv_peek(s, n, i) != '.') {
-      return i;
+    if ((p == e) || (*p != '.')) {
+      return p;
     }
-    ++i;
+    ++p;
   }
 }
 
 int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
-  nsv_semver_t v;
-  size_t i, pre_b = 0, pre_e = 0, build_b = 0, build_e = 0;
-  int ovf = 0;
+  char const *p, *e, *pre = NULL, *pre_e = NULL, *build = NULL, *build_e = NULL;
+  uint32_t num[3];
+  unsigned k, ovf = 0;
 
   if (!out || !s) {
     return NSV_RET_ERR_ARG;
   }
+  p = s;
+  e = s + len;
 
-  i = nsv_scan_num(s, len, 0, &v.major, &ovf);
-  if (!i || (nsv_peek(s, len, i) != '.')) {
-    return NSV_RET_ERR_SYNTAX;
-  }
-  i = nsv_scan_num(s, len, i + 1, &v.minor, &ovf);
-  if (!i || (nsv_peek(s, len, i) != '.')) {
-    return NSV_RET_ERR_SYNTAX;
-  }
-  i = nsv_scan_num(s, len, i + 1, &v.patch, &ovf);
-  if (!i) {
-    return NSV_RET_ERR_SYNTAX;
+  /* MAJOR.MINOR.PATCH, each "0" or [1-9][0-9]*. A leading zero ends the number after
+     the '0', so whatever follows fails the separator check. Overflow is noted, not
+     returned: a syntax error later in the string takes precedence. */
+  for (k = 0; k < 3u; ++k) {
+    uint32_t x, d;
+    if ((p == e) || ((x = (uint32_t)(unsigned char)*p - '0') >= 10u)) {
+      return NSV_RET_ERR_SYNTAX;
+    }
+    ++p;
+    if (x) {
+      while ((p != e) && ((d = (uint32_t)(unsigned char)*p - '0') < 10u)) {
+        /* x * 10 + d > UINT32_MAX, without a division; rarely taken. */
+        if ((x >= 429496729u) && ((x > 429496729u) || (d > 5u))) {
+          ovf = 1;
+        }
+        x = (x * 10u) + d;
+        ++p;
+      }
+    }
+    num[k] = x;
+    if (k < 2u) {
+      if ((p == e) || (*p != '.')) {
+        return NSV_RET_ERR_SYNTAX;
+      }
+      ++p;
+    }
   }
 
-  if (nsv_peek(s, len, i) == '-') {
-    pre_b = i + 1;
-    pre_e = i = nsv_scan_ids(s, len, pre_b, 1);
-    if (!i) {
+  if ((p != e) && (*p == '-')) {
+    pre = ++p;
+    pre_e = p = nsv_scan_ids(p, e, 1);
+    if (!p) {
       return NSV_RET_ERR_SYNTAX;
     }
   }
-  if (nsv_peek(s, len, i) == '+') {
-    build_b = i + 1;
-    build_e = i = nsv_scan_ids(s, len, build_b, 0);
-    if (!i) {
+  if ((p != e) && (*p == '+')) {
+    build = ++p;
+    build_e = p = nsv_scan_ids(p, e, 0);
+    if (!p) {
       return NSV_RET_ERR_SYNTAX;
     }
   }
-  if (i != len) {
+  if (p != e) {
     return NSV_RET_ERR_SYNTAX;
   }
 
@@ -125,12 +143,14 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
     return NSV_RET_ERR_TOO_LONG;
   }
 
-  v.src = s;
-  v.pre_ofs = (uint16_t)pre_b;
-  v.pre_len = (uint16_t)(pre_e - pre_b);
-  v.build_ofs = (uint16_t)build_b;
-  v.build_len = (uint16_t)(build_e - build_b);
-  *out = v;
+  out->major = num[0];
+  out->minor = num[1];
+  out->patch = num[2];
+  out->src = s;
+  out->pre_ofs = (uint16_t)(pre ? (pre - s) : 0);
+  out->pre_len = (uint16_t)(pre_e - pre);
+  out->build_ofs = (uint16_t)(build ? (build - s) : 0);
+  out->build_len = (uint16_t)(build_e - build);
   return NSV_RET_OK;
 }
 
@@ -138,67 +158,93 @@ static char const *nsv_base(nsv_semver_t const *s) {
   return s->src ? s->src : ((char const *)s + sizeof(*s));
 }
 
-static int nsv_cmp_u32(uint32_t a, uint32_t b) {
-  return (a > b) - (a < b);
-}
-
 /* Semver 11.3-11.4 on two pre-release spans, -1/0/1. Empty means none, which ranks
-   above every pre-release. Identifiers are well-formed, so numeric ones have no
-   leading zeros and compare by length, then digit by digit, at any size. */
-static int nsv_cmp_pre(char const *a, size_t an, char const *b, size_t bn) {
-  size_t i = 0, j = 0;
+   above every pre-release. Everything before the first differing byte is equal,
+   including where the identifiers split, so only the identifier holding that byte
+   matters, and only whether it is all digits: that takes the digit runs either side
+   of the difference, never a whole identifier. Identifiers are well-formed, so
+   numeric ones have no leading zeros and compare by length first. Out of line: most
+   comparisons never get here, and its registers would cost them all a prologue. */
+static NSV_NOINLINE int nsv_cmp_pre(char const *a, size_t an, char const *b, size_t bn) {
+  size_t const n = (an < bn) ? an : bn;
+  size_t i = 0, k, ae, be;
+  unsigned num, ad, bd, ca, cb;
+
   if (!an || !bn) {
     return (an == 0) - (bn == 0);
   }
-  for (;;) {
-    size_t ie = i, je = j, al, bl;
-    int ad = 1, bd = 1, c;
-    while ((ie < an) && (a[ie] != '.')) {
-      ad &= nsv_is_digit(a[ie++]);
-    }
-    while ((je < bn) && (b[je] != '.')) {
-      bd &= nsv_is_digit(b[je++]);
-    }
-    if (ad != bd) {
-      return ad ? -1 : 1; /* numeric < alphanumeric */
-    }
-    al = ie - i;
-    bl = je - j;
-    if (ad && (al != bl)) {
-      return (al < bl) ? -1 : 1;
-    }
-    c = memcmp(a + i, b + j, (al < bl) ? al : bl);
-    if (c) {
-      return (c < 0) ? -1 : 1;
-    }
-    if (al != bl) {
-      return (al < bl) ? -1 : 1; /* a prefix sorts first */
-    }
-    if ((ie == an) || (je == bn)) {
-      return (ie != an) - (je != bn); /* fewer identifiers sorts first */
-    }
-    i = ie + 1;
-    j = je + 1;
+  while ((i < n) && (a[i] == b[i])) {
+    ++i;
   }
+  if (i == n) {
+    /* One is a prefix of the other. Whether the longer continues with more
+       identifiers or a longer last one, the shorter sorts first. */
+    return (an > bn) - (an < bn);
+  }
+  for (k = i; (k > 0) && nsv_is_digit(a[k - 1]); --k) {
+  }
+  num = (k == 0) || (a[k - 1] == '.'); /* the shared part is all digits */
+  for (ae = i; (ae < an) && nsv_is_digit(a[ae]); ++ae) {
+  }
+  for (be = i; (be < bn) && nsv_is_digit(b[be]); ++be) {
+  }
+  ad = num && ((ae == an) || (a[ae] == '.'));
+  bd = num && ((be == bn) || (b[be] == '.'));
+  if (ad != bd) {
+    return ad ? -1 : 1; /* numeric < alphanumeric */
+  }
+  if (ad && (ae != be)) {
+    return (ae < be) ? -1 : 1;
+  }
+  /* Same-length numbers, or ASCII order, where an identifier that ends here is a
+     prefix of the other and sorts first. */
+  ca = (a[i] == '.') ? 0u : (unsigned char)a[i];
+  cb = (b[i] == '.') ? 0u : (unsigned char)b[i];
+  return (ca < cb) ? -1 : 1;
 }
 
 int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
-  int c;
+#if UINTPTR_MAX > 0xFFFFFFFFu
+  /* 64-bit registers take major and minor as one key, sparing a sort's comparator an
+     unpredictable branch. */
+  uint64_t x, y;
   if (!a || !b) {
     return NSV_RET_ERR_ARG;
   }
-  c = nsv_cmp_u32(a->major, b->major);
-  if (!c) {
-    c = nsv_cmp_u32(a->minor, b->minor);
+  x = ((uint64_t)a->major << 32) | a->minor;
+  y = ((uint64_t)b->major << 32) | b->minor;
+  if (x == y) {
+    x = a->patch;
+    y = b->patch;
+    if (x == y) {
+      return nsv_cmp_pre(nsv_base(a) + a->pre_ofs, a->pre_len, nsv_base(b) + b->pre_ofs,
+                         b->pre_len) + 1;
+    }
   }
-  if (!c) {
-    c = nsv_cmp_u32(a->patch, b->patch);
+  return (x < y) ? NSV_CMP_LT : NSV_CMP_GT;
+#else
+  /* 32-bit cores, where a wide key costs registers: the first unequal field decides,
+     written as selects, which compile to the fewest instructions. */
+  uint32_t x, y;
+  if (!a || !b) {
+    return NSV_RET_ERR_ARG;
   }
-  if (!c) {
-    c = nsv_cmp_pre(nsv_base(a) + a->pre_ofs, a->pre_len, nsv_base(b) + b->pre_ofs,
-                    b->pre_len);
+  x = a->major;
+  y = b->major;
+  if (x == y) {
+    x = a->minor;
+    y = b->minor;
   }
-  return c + 1; /* NSV_CMP_LT / NSV_CMP_EQ / NSV_CMP_GT */
+  if (x == y) {
+    x = a->patch;
+    y = b->patch;
+  }
+  if (x != y) {
+    return (x < y) ? NSV_CMP_LT : NSV_CMP_GT;
+  }
+  return nsv_cmp_pre(nsv_base(a) + a->pre_ofs, a->pre_len, nsv_base(b) + b->pre_ofs,
+                     b->pre_len) + 1;
+#endif
 }
 
 int nsv_copy(void *dst, size_t cap, nsv_semver_t const *s) {
@@ -247,7 +293,36 @@ int nsv_copy(void *dst, size_t cap, nsv_semver_t const *s) {
   return (int)need;
 }
 
-static size_t nsv_u32_len(uint32_t v) {
+#if NSV_SOFT_DIV
+/* Decimal digits in v, by comparison. */
+static NSV_INLINE size_t nsv_u32_len(uint32_t v) {
+  size_t n = 1;
+  uint32_t p = 10;
+  while ((n < 10u) && (v >= p)) {
+    ++n;
+    p *= 10u;
+  }
+  return n;
+}
+
+/* v / 10 and v % 10 by Hacker's Delight divu10: q is v / 10 or one short, exactly,
+   over all of uint32_t. */
+static NSV_INLINE uint32_t nsv_div10(uint32_t v, uint32_t *r) {
+  uint32_t q = (v >> 1) + (v >> 2);
+  q += q >> 4;
+  q += q >> 8;
+  q += q >> 16;
+  q >>= 3;
+  *r = v - (q * 10u);
+  if (*r > 9u) {
+    ++q;
+    *r -= 10u;
+  }
+  return q;
+}
+#else
+/* Decimal digits in v; a divide by a constant is a multiply. */
+static NSV_INLINE size_t nsv_u32_len(uint32_t v) {
   size_t n = 1;
   while (v >= 10u) {
     v /= 10u;
@@ -256,36 +331,42 @@ static size_t nsv_u32_len(uint32_t v) {
   return n;
 }
 
-static char *nsv_put_u32(char *d, uint32_t v, size_t len) {
-  char *p = d + len;
+static NSV_INLINE uint32_t nsv_div10(uint32_t v, uint32_t *r) {
+  uint32_t const q = v / 10u;
+  *r = v - (q * 10u);
+  return q;
+}
+#endif
+
+/* Writes v in decimal ending just before end; returns its first digit. */
+static NSV_INLINE char *nsv_put_u32(char *end, uint32_t v) {
   do {
-    *--p = (char)('0' + (v % 10u));
-    v /= 10u;
+    uint32_t r;
+    v = nsv_div10(v, &r);
+    *--end = (char)('0' + r);
   } while (v);
-  return d + len;
+  return end;
 }
 
-static char *nsv_put_span(char *d, char sep, char const *src, size_t len) {
+/* Writes sep and len bytes of src ending just before end; returns the start. */
+static char *nsv_put_span(char *end, char sep, char const *src, size_t len) {
   if (len) {
-    *d++ = sep;
-    memcpy(d, src, len);
-    d += len;
+    end -= len;
+    memcpy(end, src, len);
+    *--end = sep;
   }
-  return d;
+  return end;
 }
 
 int nsv_format(char *dst, size_t n, nsv_semver_t const *s) {
   char const *base;
-  size_t l0, l1, l2, len;
+  size_t len;
 
   if (!s) {
     return NSV_RET_ERR_ARG;
   }
-  l0 = nsv_u32_len(s->major);
-  l1 = nsv_u32_len(s->minor);
-  l2 = nsv_u32_len(s->patch);
-  len = l0 + 1u + l1 + 1u + l2 + (s->pre_len ? (s->pre_len + 1u) : 0u) +
-        (s->build_len ? (s->build_len + 1u) : 0u);
+  len = nsv_u32_len(s->major) + 1u + nsv_u32_len(s->minor) + 1u + nsv_u32_len(s->patch) +
+        (s->pre_len ? (s->pre_len + 1u) : 0u) + (s->build_len ? (s->build_len + 1u) : 0u);
 #if NSV_INT_MAX < 0x30000L
   if (len > (size_t)NSV_INT_MAX) {
     return NSV_RET_ERR_TOO_LONG;
@@ -301,20 +382,23 @@ int nsv_format(char *dst, size_t n, nsv_semver_t const *s) {
     return NSV_RET_ERR_BUF_TOO_SMALL;
   }
 
+  /* Back to front, so each number's digits come out least significant first. */
   base = nsv_base(s);
-  dst = nsv_put_u32(dst, s->major, l0);
-  *dst++ = '.';
-  dst = nsv_put_u32(dst, s->minor, l1);
-  *dst++ = '.';
-  dst = nsv_put_u32(dst, s->patch, l2);
-  dst = nsv_put_span(dst, '-', base + s->pre_ofs, s->pre_len);
-  dst = nsv_put_span(dst, '+', base + s->build_ofs, s->build_len);
+  dst += len;
   *dst = '\0';
+  dst = nsv_put_span(dst, '+', base + s->build_ofs, s->build_len);
+  dst = nsv_put_span(dst, '-', base + s->pre_ofs, s->pre_len);
+  dst = nsv_put_u32(dst, s->patch);
+  *--dst = '.';
+  dst = nsv_put_u32(dst, s->minor);
+  *--dst = '.';
+  nsv_put_u32(dst, s->major);
   return (int)len;
 }
 
-static int nsv_get_span(nsv_semver_t const *s, uint16_t ofs, uint16_t len,
-                        char const **out) {
+/* Shared by both accessors, which reduce to a tail call. */
+static NSV_NOINLINE int nsv_get_span(nsv_semver_t const *s, uint16_t ofs, uint16_t len,
+                                     char const **out) {
 #if NSV_INT_MAX < 0x30000L
   if ((unsigned)len > (unsigned)NSV_INT_MAX) {
     return NSV_RET_ERR_TOO_LONG;

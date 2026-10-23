@@ -7,7 +7,7 @@
 Parse, compare and format [Semantic Versioning 2.0.0](https://semver.org) strings in C99.
 Parsing is done in place: it never allocates, never copies, and reads only the bytes you
 give it. Two files, `nanosemver.h` and `nanosemver.c`, needing nothing from the C
-library beyond `memcpy` and `memcmp`.
+library beyond `memcpy`.
 
 ```c
 #include "nanosemver.h"
@@ -84,6 +84,60 @@ The spec sets no limits on length or numeric size; nanosemver's are `uint32_t` n
 and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` and
 `TOO_LONG` only ever describe valid semver.
 
+## Performance
+
+`nsv_parse` reads each byte once and never divides: overflow is caught by a comparison
+per digit. `nsv_cmp` settles most comparisons on the numbers alone; when the pre-release
+decides, it finds the first byte where the two differ and classifies only the identifier
+around it, instead of splitting both into identifiers. On cores without a fast divide,
+`nsv_format` divides by shifts and adds, so nothing from libgcc is linked in: on every
+Cortex-M, `memcpy` is the only call out of `nanosemver.c`.
+
+Nanoseconds per call on an Apple M3 Pro at `-O2`; the Linux compilers ran in a VM on the
+same machine. Each workload is 1024 versions from a fixed-seed generator in
+`bench/bench.cc`: mostly one- and two-digit numbers, registry-style tags, hashes and
+timestamps.
+
+| Workload | Apple clang 21 | gcc 15 | clang 22 |
+|---|---:|---:|---:|
+| `nsv_parse`, releases (`4.17.21`) | 7.5 | 9.3 | 7.2 |
+| `nsv_parse`, pre-releases (`2.0.0-beta.3`) | 12.9 | 14.5 | 12.7 |
+| `nsv_parse`, both (`1.0.0-rc.1+sha.5114f85`) | 22.0 | 25.4 | 22.7 |
+| `nsv_parse`, 40-character hashes, 58 bytes | 38.3 | 43.4 | 39.8 |
+| `nsv_cmp`, the numbers decide | 1.1 | 1.1 | 1.1 |
+| `nsv_cmp`, the pre-release decides | 5.2 | 4.7 | 4.9 |
+| `nsv_format` | 8.3 | 8.0 | 7.5 |
+| `std::sort` of all 1024, using `nsv_cmp` | 16.7 µs | 14.6 µs | 17.2 µs |
+
+Cycles per call on Cortex-M at `-Os`, with the same inputs, counted in an emulator
+(exact instruction counts, cycles from a simple zero-wait-state model), and code size:
+
+| | Cortex-M0+ | Cortex-M4 |
+|---|---:|---:|
+| `nsv_parse`, releases | 227 | 239 |
+| `nsv_parse`, pre-releases | 406 | 416 |
+| `nsv_parse`, both | 656 | 673 |
+| `nsv_parse`, 40-character hashes | 1090 | 1161 |
+| `nsv_cmp`, the numbers decide | 24 | 26 |
+| `nsv_cmp`, the pre-release decides | 169 | 152 |
+| `nsv_format` | 322 | 240 |
+| `nanosemver.o`, bytes of code and data | 1260 | 1274 |
+
+`NSV_SOFT_DIV` selects the shift-and-add divide: 1 by default on Cortex-M0/M0+/M1, AVR,
+MSP430 and RISC-V without M, 0 elsewhere. Define it to override.
+
+### Measuring
+
+`make bench` builds this tree's `nanosemver.c` and `BENCH_BASE`'s (default `origin/main`)
+into one binary and times them interleaved, alternating which goes first, so thermal and
+frequency drift hit both alike; every workload also checksums both sides' results, and a
+mismatch voids the run. `make bench-cm` runs the same workloads through bare Cortex-M0+
+and Cortex-M4 images of both in the [Unicorn](https://www.unicorn-engine.org) emulator.
+`make size` prints the Cortex-M code size function by function, and `make size-check`
+fails if it outgrows `size-budget.mk` or calls anything but `memcpy`. The Arm toolchain
+and [uv](https://docs.astral.sh/uv/), which provisions the emulator, come through envy
+on first use; `make` never touches them.
+
 ## Development
 
 `make` builds and runs the unit tests on Linux and macOS; `build.bat` does the same with
@@ -93,11 +147,14 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs and division by shifts |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
-| `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both `int` configurations |
+| `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
 | `make libfuzzer` | libFuzzer with ASan and UBSan (Linux clang; Apple clang ships no libFuzzer) |
+| `make bench BENCH_ARGS=--quick` | host timings against `BENCH_BASE`; `--filter cmp` picks workloads |
+| `make bench-cm` | emulated Cortex-M0+ and Cortex-M4 instruction counts and cycles against `BENCH_BASE` |
+| `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks |
 | `build.bat [fuzz \| clean]` | the unit tests, both configurations, and optionally the fuzz driver, with MSVC |
 
 The tests check `nanosemver.c` against a deliberately naive reference implementation in
@@ -106,6 +163,8 @@ publishes. Every string the tests parse sits against a guard page, so reading on
 past the end faults even without a sanitizer. The fuzzers check the same properties on
 generated and mutated input: the result code, every field, the format round-trip, deep
 copy and relocation, and comparison in both directions against the reference.
+`tests/test_long.cc` runs those checks exhaustively on long sections: every byte value at
+every position, every length up to 40, and comparisons that differ at every position.
 
 ## Releases
 

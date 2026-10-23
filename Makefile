@@ -8,21 +8,34 @@
 #   DOCTEST_H       path to doctest.h; set it and envy is never invoked
 #   FUZZ_ARGS       standalone fuzz driver arguments for `make fuzz` (-t 30)
 #   LIBFUZZER_ARGS  libFuzzer arguments for `make libfuzzer` (-max_total_time=60)
+#   BENCH_BASE      the git revision `make bench` and `make bench-cm` measure against
+#                   (origin/main)
+#   BENCH_OPT       optimization for `make bench` (-O2)
+#   BENCH_ARGS      benchmark arguments for `make bench`, e.g. --quick or --filter cmp
+#   ARM_CC          arm-none-eabi-gcc for the Cortex-M targets; envy's by default
 #   V=1             echo full commands
 #
 # Targets:
-#   test        (default) the unit tests, built twice: as configured, and with
-#               -DNSV_INT_MAX=32767 to reach the checks a 16-bit int needs
+#   test        (default) the unit tests, built twice: as configured, and as for a
+#               small MCU like an AVR, whose 16-bit int needs the length checks that
+#               -DNSV_INT_MAX=32767 compiles in, and division by shifts
 #   fuzz        the standalone fuzz driver; any compiler
 #   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
-#   clean       everything under build/ except the envy package cache
+#   bench       this tree against BENCH_BASE, both in one binary, timed interleaved
+#   bench-cm    instructions and estimated cycles per call on emulated Cortex-M0+ and
+#               Cortex-M4, against BENCH_BASE
+#   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function
+#   size-check  fails if the code outgrows size-budget.mk or calls into libc or libgcc
+#               for anything but memcpy
+#   clean       everything under build/ except the envy and uv package caches
 
 CFG  ?= Release
 ARCH ?= 64
 SAN  ?=
 
 comma := ,
+space := $(subst ,, )
 COMPILER_ID := $(shell $(CC) --version 2>&1)
 IS_CLANG := $(findstring clang,$(COMPILER_ID))
 
@@ -39,7 +52,9 @@ CONFIG := $(notdir $(firstword $(CC)))-$(CFG)-$(ARCH)$(if $(SAN),-$(subst $(comm
 BUILD ?= build/$(CONFIG)
 
 # --- doctest, through envy --------------------------------------------------------
-ifeq ($(filter clean,$(MAKECMDGOALS)),)
+# Only the test binaries need it.
+NO_DOCTEST_GOALS := clean bench bench-cm size size-check
+ifneq ($(if $(MAKECMDGOALS),$(filter-out $(NO_DOCTEST_GOALS),$(MAKECMDGOALS)),test),)
   ifeq ($(origin DOCTEST_H),undefined)
     DOCTEST_H := $(shell ./bin/envy -q product doctest_cpp_h)
     ifeq ($(DOCTEST_H),)
@@ -93,7 +108,7 @@ CFLAGS   := -std=c99 $(WARN) $(WARN_C) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA
 CXXFLAGS := -std=c++20 $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS) \
             $(DOCTEST_INC)
 LDFLAGS  := $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS)
-INT16_DEFS := -DNSV_INT_MAX=32767
+INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1
 
 # --- sources ----------------------------------------------------------------------
 # Globbed, so a new test file needs no registration here; build.bat globs the same.
@@ -110,7 +125,7 @@ C11_OBJ := $(BUILD)/c11/nanosemver.c.o
 ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ))
 
 # --- rules ------------------------------------------------------------------------
-.PHONY: test fuzz libfuzzer coverage clean
+.PHONY: test fuzz libfuzzer coverage bench bench-cm size size-check clean FORCE
 .DEFAULT_GOAL := test
 
 test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ)
@@ -233,11 +248,135 @@ coverage:
 	$(call cov_check,nsv_unittests)
 	$(call cov_check,nsv_unittests_int16)
 
-# Everything under build/ except the envy cache: refetching packages is not what
+# --- benchmarks -------------------------------------------------------------------
+BENCH_BASE ?= origin/main
+
+# BENCH_BASE's nanosemver.c and .h, rewritten only when they differ so the objects
+# built from them stay up to date. Both benchmarks link it beside this tree's.
+BENCH_SRC := build/bench-base/$(subst /,_,$(BENCH_BASE))
+BENCH_RENAME := $(foreach f,parse cmp copy format get_pre get_build,-Dnsv_$(f)=nsvbase_$(f))
+
+FORCE:
+
+$(BENCH_SRC)/nanosemver.c: FORCE
+	@mkdir -p $(dir $@)
+	@for f in nanosemver.c nanosemver.h; do \
+		git show "$(BENCH_BASE):$$f" > $(dir $@)$$f.tmp || exit 1; \
+		if cmp -s $(dir $@)$$f.tmp $(dir $@)$$f; then rm $(dir $@)$$f.tmp; \
+		else mv $(dir $@)$$f.tmp $(dir $@)$$f; fi; \
+	done
+
+# Host: no sanitizers, the warnings the tests get, BENCH_OPT. The baseline is held to
+# none of them: it is whatever BENCH_BASE was.
+BENCH_OPT ?= -O2
+BENCH_ARGS ?=
+BENCH_BUILD := build/bench/$(notdir $(firstword $(CC)))$(subst $(space),,$(BENCH_OPT))-$(ARCH)
+BENCH_FLAGS := $(BENCH_OPT) $(ARCH_FLAGS) -I.
+
+$(BENCH_BUILD)/base.o: $(BENCH_SRC)/nanosemver.c
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< ($(BENCH_BASE))"
+	$(Q)$(CC) -std=c99 $(BENCH_FLAGS) $(BENCH_RENAME) -c $< -o $@
+
+$(BENCH_BUILD)/nanosemver.o: nanosemver.c nanosemver.h Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< (bench)"
+	$(Q)$(CC) -std=c99 $(WARN) $(WARN_C) $(BENCH_FLAGS) -c $< -o $@
+
+$(BENCH_BUILD)/bench.o: bench/bench.cc nanosemver.h Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX $<
+	$(Q)$(CXX) -std=c++20 $(WARN) $(WARN_CXX) $(BENCH_FLAGS) \
+		-DNSV_BENCH_BASE='"$(BENCH_BASE)"' -c $< -o $@
+
+$(BENCH_BUILD)/nsv_bench: $(BENCH_BUILD)/bench.o $(BENCH_BUILD)/nanosemver.o $(BENCH_BUILD)/base.o
+	$(MSG) LINK $@
+	$(Q)$(CXX) $(ARCH_FLAGS) $^ -o $@
+
+bench: $(BENCH_BUILD)/nsv_bench
+ifneq ($(SAN),)
+	$(error a benchmark built with SAN=$(SAN) measures the sanitizer)
+endif
+	$(Q)$< $(BENCH_ARGS)
+
+# --- Cortex-M ---------------------------------------------------------------------
+# The cross compiler and uv come through envy, resolved once and only by the goals
+# below, so nothing else ever fetches them. The cross binutils are the compiler's own.
+envy_product = $(or $(shell ./bin/envy -q product $(1)),$(error envy could not resolve $(1)))
+ARM_CC ?= $(eval ARM_CC := $$(call envy_product,arm-none-eabi-gcc))$(ARM_CC)
+UV ?= $(eval UV := $$(call envy_product,uv))$(UV)
+arm_tool = $(or $(wildcard $(shell $(ARM_CC) -print-prog-name=$(1))), \
+	$(error $(ARM_CC) has no $(1) beside it))
+ARM_NM = $(eval ARM_NM := $$(call arm_tool,nm))$(ARM_NM)
+ARM_OBJDUMP = $(eval ARM_OBJDUMP := $$(call arm_tool,objdump))$(ARM_OBJDUMP)
+export UV_CACHE_DIR := $(CURDIR)/build/uv-cache
+export UV_PYTHON_INSTALL_DIR := $(CURDIR)/build/uv-cache/python
+
+CM_BUILD := build/cm
+CM_FLAGS := -mthumb -Os -std=c99 -Wall -Wextra -Werror -Wconversion -Wsign-conversion
+cm_cpu = $(if $(filter m0,$(1)),cortex-m0plus,cortex-m4)
+
+include size-budget.mk
+
+$(CM_BUILD)/m0.o $(CM_BUILD)/m4.o: $(CM_BUILD)/%.o: nanosemver.c nanosemver.h Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< ($(call cm_cpu,$*))"
+	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) -I. -c $< -o $@
+
+# Bare images for bench/cm/cmcount.py, which calls the API directly. newlib-nano and
+# libgcc supply whatever the code pulls in, and count with it.
+CM_LINK := -specs=nano.specs -nostartfiles -T bench/cm/link.ld -Wl,--gc-sections \
+	$(foreach f,parse cmp copy format get_pre get_build,-Wl,-u,nsv_$(f)) -Wl,-e,nsv_parse
+
+$(CM_BUILD)/new-m0.elf $(CM_BUILD)/new-m4.elf: $(CM_BUILD)/new-%.elf: nanosemver.c \
+		nanosemver.h bench/cm/link.ld Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) LINK "$@"
+	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) -I. $(CM_LINK) $< -o $@
+
+$(CM_BUILD)/base-m0.elf $(CM_BUILD)/base-m4.elf: $(CM_BUILD)/base-%.elf: \
+		$(BENCH_SRC)/nanosemver.c bench/cm/link.ld Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) LINK "$@ ($(BENCH_BASE))"
+	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) -mthumb -Os -std=c99 $(CM_LINK) $< -o $@
+
+bench-cm: $(foreach c,m0 m4,$(CM_BUILD)/base-$(c).elf $(CM_BUILD)/new-$(c).elf)
+	@for c in m0 m4; do \
+		echo; echo "$$( [ $$c = m0 ] && echo Cortex-M0+ || echo Cortex-M4 ), -Os:" \
+			"$(BENCH_BASE) (base) against this tree (new)"; \
+		$(UV) run --quiet bench/cm/cmcount.py --cpu $$c \
+			--objdump "$(ARM_OBJDUMP)" \
+			$(CM_BUILD)/base-$$c.elf $(CM_BUILD)/new-$$c.elf || exit 1; \
+	done
+
+# Total bytes of code and data in object $(1), or a failure.
+cm_bytes = "$(ARM_NM)" --print-size --radix=d $(1) | \
+	awk 'NF == 4 { s += $$2 } END { if (!s) exit 1; print s }'
+
+size: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
+	@for c in m0 m4; do \
+		echo; echo "> arm-none-eabi-gcc -mcpu=$$( [ $$c = m0 ] && echo cortex-m0plus || echo cortex-m4 ) $(CM_FLAGS) -c nanosemver.c"; \
+		"$(ARM_NM)" --print-size --size-sort --radix=d $(CM_BUILD)/$$c.o | \
+			awk 'NF == 4 { printf "  %5d  %s\n", $$2, $$4; s += $$2 } END { printf "  %5d  total\n", s }'; \
+		echo "  calls: $$("$(ARM_NM)" --undefined-only $(CM_BUILD)/$$c.o | awk '{ printf "%s ", $$2 }')"; \
+	done
+
+size-check: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
+	@for c in m0:$(NSV_SIZE_M0_MAX) m4:$(NSV_SIZE_M4_MAX); do \
+		o=$(CM_BUILD)/$${c%%:*}.o; max=$${c#*:}; \
+		t=$$($(call cm_bytes,$$o)) || { echo "$$o: no size"; exit 1; }; \
+		echo "$$o: $$t bytes (budget $$max)"; \
+		if [ $$t -gt $$max ]; then echo "SIZE BUDGET EXCEEDED"; exit 1; fi; \
+		u=$$("$(ARM_NM)" --undefined-only $$o | awk '{ print $$2 }' | grep -vx memcpy); \
+		if [ -n "$$u" ]; then echo "$$o calls more than memcpy:"; echo "$$u"; exit 1; fi; \
+	done
+
+# Everything under build/ except the package caches: refetching them is not what
 # anyone means by `make clean`. `rm -rf build` for that.
 clean:
 	@if [ -d build ]; then \
-		find build -mindepth 1 -maxdepth 1 ! -name envy-cache -exec rm -rf {} +; \
+		find build -mindepth 1 -maxdepth 1 ! -name envy-cache ! -name uv-cache \
+			-exec rm -rf {} +; \
 	fi
 
 -include $(ALL_OBJS:.o=.d) $(LF_OBJS:.o=.d)
