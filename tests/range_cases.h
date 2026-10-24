@@ -184,6 +184,7 @@ inline constexpr match_case k_partial[] = {
   { "<1", "0.99.0", 1, 1 },
   { "<=1.2", "1.2.99", 1, 1 },
   { "<=1.2", "1.3.0-0", 0, 0 },
+  { "<=1.2 >=1.3.0-rc", "1.3.0-rc.1", 0, 0 },  // its end is 1.3.0-0 in either mode
   { "<=1", "1.9.9", 1, 1 },
   { "<=1", "2.0.0-0", 0, 0 },
   { "~1.2", "1.2.0-0", 1, 0 },
@@ -274,6 +275,10 @@ inline constexpr match_case k_not[] = {
   { "!=*", "1.0.0", 0, 0 },
   { ">=1 !=1.4.x <2", "1.4.5", 0, 0 },
   { ">=1 !=1.4.x <2", "1.5.0", 1, 1 },
+  // The line starts at X.Y.0-0 in either mode: a pre-release another comparator lets in
+  // is on it.
+  { "!=1.x >=1.0.0-0", "1.0.0-rc", 0, 0 },
+  { "!=1.x >=0.9.9-0", "0.9.9-rc", 1, 1 },
 };
 
 // Other grammars' spellings: Python's and Composer's ==, PEP 440's ~=, RubyGems' and

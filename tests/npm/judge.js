@@ -13,12 +13,12 @@ const beyondNpm = s => (s.length > 256) || /\d{16,}/.test(s);
 // like 0.x, ^0 and >=0.0, which lets 0.0.0's pre-releases past it; and a set of just *
 // (or x, >=*, ^*, ...) takes over the whole range, shutting out pre-releases another set
 // names. Only under npm's default, NSV_RANGE_EXCLUDE_PRE's counterpart, and only for a
-// pre-release.
+// pre-release; spelled with ~> or ~= and a v too.
 const zero = '0(\\.(0|[xX*]))?(\\.(0|[xX*]))?(\\+[0-9A-Za-z.-]*)?';
 const wild = '[xX*](\\.[xX*]){0,2}';
 const npmAny = (r, v) => (semver.prerelease(v) !== null) &&
-    new RegExp(`(^|[\\s|])((>=|\\^|~|=)?\\s*${zero}|(>=|<=|\\^|~|=)?\\s*${wild})(?=$|[\\s|])`)
-        .test(r);
+    new RegExp(`(^|[\\s|])((>=|\\^|~[>=]?|=)?\\s*v?${zero}|(>=|<=|\\^|~|=)?\\s*v?${wild})` +
+               `(?=$|[\\s|])`).test(r);
 // != is not npm's, and has no npm spelling: held to the reference tests instead.
 const notNpm = r => r.includes('!=');
 // The other grammars' spellings nanosemver takes, as npm's: a comma between comparators
