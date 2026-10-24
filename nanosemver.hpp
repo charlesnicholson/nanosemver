@@ -21,6 +21,10 @@ class SemVer {
  public:
   constexpr SemVer() noexcept : p_(nullptr) {}
 
+  /* A copy of s: a view, literal, or copy. rc is NSV_RET_OK, or ERR_TOO_LONG, and the
+     version 0.0.0, if nsv_copy refuses s, which it does only for a 65535-byte pre-release
+     (never one from nsv_parse) or, where int is 16 bits, a copy over INT_MAX bytes. */
+  static SemVer from(nsv_semver_t const &s, int &rc) { return SemVer(s, rc); }
 
   SemVer(SemVer const &o) : p_(nullptr) {
     if (o.p_) {
@@ -57,11 +61,6 @@ class SemVer {
     int const rc = nsv_parse_prefix(&v, s, len, &consumed);
     return (rc == NSV_RET_OK) ? assign(v) : rc;
   }
-
-  /* A copy of s: a view, literal, or copy. rc is NSV_RET_OK, or ERR_TOO_LONG, and the
-     version 0.0.0, if nsv_copy refuses s, which it does only for a 65535-byte pre-release
-     (never one from nsv_parse) or, where int is 16 bits, a copy over INT_MAX bytes. */
-  static SemVer from(nsv_semver_t const &s, int &rc) { return SemVer(s, rc); }
 
   /* Replaces *this with a copy of s: a view, literal, or copy, *this's own included.
      Returns NSV_RET_OK, or ERR_TOO_LONG if nsv_copy refuses s. */
