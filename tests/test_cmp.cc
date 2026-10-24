@@ -302,3 +302,20 @@ TEST_CASE("nsv_cmp: sorts copies through an array of pointers") {
     REQUIRE(nsv_test::format(*p[i]) == k_ascending[i]);
   }
 }
+
+TEST_CASE("nsv_cmp: never looks before a pre-release") {
+  // In a copy the pre-release follows the header, whose last two bytes are build_len's.
+  // A build 0x3030 bytes long makes them digits, '0' and '0'; a scan for the digits
+  // around a difference that strayed back past the pre-release's start would take "9"
+  // for the end of a longer number, and rank it above "10".
+  std::string const build(0x3030, 'b');
+  for (char const *pair : { "9 10", "1 10", "0 1", "9 a", "1.9 1.10" }) {
+    std::string const p = pair;
+    std::string const a = "1.0.0-" + p.substr(0, p.find(' ')) + "+" + build;
+    std::string const b = "1.0.0-" + p.substr(p.find(' ') + 1) + "+" + build;
+    nsv_test::blob const ca = nsv_test::copy(parse_ok(a)), cb = nsv_test::copy(parse_ok(b));
+    INFO(pair);
+    REQUIRE(cmp(*ca, *cb) == -1);
+    REQUIRE(cmp(*cb, *ca) == 1);
+  }
+}

@@ -23,6 +23,17 @@
 #endif
 #endif
 
+/* nsv_cmp takes major and minor as one 64-bit key where registers are that wide, and
+   compares field by field elsewhere. Defining NSV_WIDE_CMP picks one, so the tests build
+   both on any host. */
+#ifndef NSV_WIDE_CMP
+#if UINTPTR_MAX > 0xFFFFFFFFu
+#define NSV_WIDE_CMP 1
+#else
+#define NSV_WIDE_CMP 0
+#endif
+#endif
+
 /* NSV_NOINLINE keeps a rarer path's code and register pressure out of its caller.
    NSV_INLINE inlines a hot helper into its callers when optimizing for speed, where
    compilers otherwise decide differently with every small change; under -Os the
@@ -52,9 +63,11 @@ static int nsv_is_digit(char c) {
   return ((unsigned)(unsigned char)c - '0') < 10u;
 }
 
-/* Scans dot-separated identifiers of [0-9A-Za-z-] in [p, e). With pre, all-digit
-   identifiers must be "0" or start with [1-9] (the pre-release rule). Returns the end
-   of the last identifier, or NULL on an empty identifier or a leading zero. */
+/* Scans dot-separated identifiers of [0-9A-Za-z-] in [p, e), which follows a '-', '+'
+   or '.'. With pre, all-digit identifiers must be "0" or start with [1-9] (the
+   pre-release rule). Returns the end of the longest valid run: the separator before an
+   empty identifier, just past the '0' of one with a leading zero, or the end of the
+   last. So a whole version ends at e, and a prefix wherever this stops. */
 static NSV_INLINE char const *nsv_scan_ids(char const *p, char const *e, unsigned pre) {
   for (;;) {
     char const *const b = p;
@@ -68,8 +81,11 @@ static NSV_INLINE char const *nsv_scan_ids(char const *p, char const *e, unsigne
         alpha = 1;
       }
     }
-    if ((p == b) || (pre && !alpha && (*b == '0') && ((p - b) > 1))) {
-      return NULL;
+    if (p == b) {
+      return b - 1;
+    }
+    if (pre && !alpha && (*b == '0') && ((p - b) > 1)) {
+      return b + 1;
     }
     if ((p == e) || (*p != '.')) {
       return p;
@@ -78,10 +94,12 @@ static NSV_INLINE char const *nsv_scan_ids(char const *p, char const *e, unsigne
   }
 }
 
-int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
-  char const *p, *e, *pre = NULL, *pre_e = NULL, *build = NULL, *build_e = NULL;
-  uint32_t num[3];
-  unsigned k, ovf = 0;
+/* nsv_parse, and with consumed nsv_parse_prefix: one pass over the longest prefix of s
+   with semver's syntax, which nsv_parse requires to be all of s. */
+static int nsv_parse_to(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
+  char const *p, *e, *q, *pre = NULL, *pre_e = NULL, *build = NULL, *build_e = NULL;
+  uint32_t num[3], *n;
+  unsigned ovf = 0;
 
   if (!out || !s) {
     return NSV_RET_ERR_ARG;
@@ -92,10 +110,10 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   /* MAJOR.MINOR.PATCH, each "0" or [1-9][0-9]*. A leading zero ends the number after
      the '0', so whatever follows fails the separator check. Overflow is noted, not
      returned: a syntax error later in the string takes precedence. */
-  for (k = 0; k < 3u; ++k) {
+  for (n = num;; ++p) {
     uint32_t x, d;
     if ((p == e) || ((x = (uint32_t)(unsigned char)*p - '0') >= 10u)) {
-      return NSV_RET_ERR_SYNTAX;
+      goto syntax;
     }
     ++p;
     if (x) {
@@ -108,30 +126,28 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
         ++p;
       }
     }
-    num[k] = x;
-    if (k < 2u) {
-      if ((p == e) || (*p != '.')) {
-        return NSV_RET_ERR_SYNTAX;
-      }
-      ++p;
+    *n++ = x;
+    if (n == (num + 3)) {
+      break;
+    }
+    if ((p == e) || (*p != '.')) {
+      goto syntax;
     }
   }
 
-  if ((p != e) && (*p == '-')) {
-    pre = ++p;
-    pre_e = p = nsv_scan_ids(p, e, 1);
-    if (!p) {
-      return NSV_RET_ERR_SYNTAX;
-    }
+  /* A '-' or '+' with no identifier after it is not part of a prefix, and a scan that
+     stops short leaves p before e, which only nsv_parse_prefix accepts. */
+  if ((p != e) && (*p == '-') && ((q = nsv_scan_ids(p + 1, e, 1)) != p)) {
+    pre = p + 1;
+    pre_e = p = q;
   }
-  if ((p != e) && (*p == '+')) {
-    build = ++p;
-    build_e = p = nsv_scan_ids(p, e, 0);
-    if (!p) {
-      return NSV_RET_ERR_SYNTAX;
-    }
+  if ((p != e) && (*p == '+') && ((q = nsv_scan_ids(p + 1, e, 0)) != p)) {
+    build = p + 1;
+    build_e = p = q;
   }
-  if (p != e) {
+  if (consumed) {
+    *consumed = (size_t)(p - s);
+  } else if (p != e) {
     return NSV_RET_ERR_SYNTAX;
   }
 
@@ -139,7 +155,7 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   if (ovf) {
     return NSV_RET_ERR_OVERFLOW;
   }
-  if (len > UINT16_MAX) {
+  if ((size_t)(p - s) > UINT16_MAX) {
     return NSV_RET_ERR_TOO_LONG;
   }
 
@@ -152,6 +168,20 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   out->build_ofs = (uint16_t)(build ? (build - s) : 0);
   out->build_len = (uint16_t)(build_e - build);
   return NSV_RET_OK;
+
+syntax:
+  if (consumed) {
+    *consumed = 0;
+  }
+  return NSV_RET_ERR_SYNTAX;
+}
+
+int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
+  return nsv_parse_to(out, s, len, NULL);
+}
+
+int nsv_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
+  return consumed ? nsv_parse_to(out, s, len, consumed) : NSV_RET_ERR_ARG;
 }
 
 static char const *nsv_base(nsv_semver_t const *s) {
@@ -204,7 +234,7 @@ static NSV_NOINLINE int nsv_cmp_pre(char const *a, size_t an, char const *b, siz
 }
 
 int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
-#if UINTPTR_MAX > 0xFFFFFFFFu
+#if NSV_WIDE_CMP
   /* 64-bit registers take major and minor as one key, sparing a sort's comparator an
      unpredictable branch. */
   uint64_t x, y;
@@ -245,6 +275,228 @@ int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
   return nsv_cmp_pre(nsv_base(a) + a->pre_ofs, a->pre_len, nsv_base(b) + b->pre_ofs,
                      b->pre_len) + 1;
 #endif
+}
+
+/* A comparator's operator, packed: the nsv_cmp results it accepts as bits 0-2; how many
+   of MAJOR.MINOR.PATCH v must share with the bound, from the left, as bits 3-5, where 4
+   means ^'s leftmost nonzero (= and != say 3, which an equal version shares anyway);
+   NSV_HOW_NOT to negate the test, for != and a partial version's <= (<=1.2 is not >1.2),
+   and NSV_HOW_PARTIAL for a partial version's bound, neither of which ever lets a
+   pre-release in; NSV_HOW_EXCL under NSV_RANGE_EXCLUDE_PRE; NSV_HOW_OVF from a partial
+   version too big; and NSV_HOW_WHOLE for ==, ~= and ~>, which take no partial version. */
+#define NSV_BIT_LT (1u << NSV_CMP_LT)
+#define NSV_BIT_EQ (1u << NSV_CMP_EQ)
+#define NSV_BIT_GT (1u << NSV_CMP_GT)
+#define NSV_HOW_KEEP(n) ((unsigned)(n) << 3)
+#define NSV_HOW_NOT (1u << 6)
+#define NSV_HOW_PARTIAL (1u << 7)
+#define NSV_HOW_EXCL (1u << 8)
+#define NSV_HOW_OVF (1u << 9)
+#define NSV_HOW_WHOLE (1u << 10)
+
+static char const *nsv_skip_ws(char const *p, char const *e) {
+  while ((p != e) && ((*p == ' ') || (*p == '\t'))) {
+    ++p;
+  }
+  return p;
+}
+
+/* A partial version at the start of [s, e), as npm's ranges have them: up to three
+   components, each a number as in a version or a wildcard (x, X or *), numbers first,
+   and no pre-release or build. Only for what nsv_parse_prefix rejects, so never three
+   numbers. Returns its end, or NULL for a syntax error, and makes c and *how the bound
+   npm reads it as, which the rest of nsv_range_match takes as any other: 1.2 is
+   >=1.2.0-0 sharing MAJOR.MINOR, >1.2 is >=1.3.0-0, <=1.2 is <1.3.0-0, and * is
+   >=0.0.0-0. Lower bounds lose the -0 under NSV_RANGE_EXCLUDE_PRE, as npm's default
+   drops it: >=1.2 is then >=1.2.0, which 1.2.0-beta is not. */
+static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p,
+                                                  char const *e, unsigned *how) {
+  unsigned i = 0, k = 0, keep, h = *how | NSV_HOW_PARTIAL;
+  unsigned const acc = h & 7u;
+  c->major = c->minor = c->patch = 0;
+  for (;;) {
+    unsigned ch;
+    uint32_t x, d;
+    if (p == e) { /* a missing component, as in "" or "1." */
+      return NULL;
+    }
+    ch = (unsigned char)*p++;
+    x = ch - '0';
+    if (((ch | 0x20u) != 'x') && (ch != '*')) {
+      if ((k != i) || (x >= 10u)) {
+        return NULL;
+      }
+      if (x) {
+        while ((p != e) && ((d = (uint32_t)(unsigned char)*p - '0') < 10u)) {
+          if ((x >= 429496729u) && ((x > 429496729u) || (d > 5u))) {
+            h |= NSV_HOW_OVF;
+          }
+          x = (x * 10u) + d;
+          ++p;
+        }
+      }
+      *(i ? &c->minor : &c->major) = x;
+      k = i + 1u;
+    }
+    if ((++i == 3u) || (p == e) || (*p != '.')) {
+      break;
+    }
+    ++p;
+  }
+  /* In their own grammars ==1.2 is 1.2.0, ~=1.2 and ~>1.2 are >=1.2 <2 and !=1.2 is not
+     1.2.0, none of them the 1.2 line: so ==, ~= and ~> take only whole versions, and !=
+     a partial one only with a wildcard. */
+  if ((h & NSV_HOW_WHOLE) || ((h & NSV_HOW_NOT) && (k == i))) {
+    return NULL;
+  }
+
+  if (acc == (NSV_BIT_LT | NSV_BIT_EQ)) { /* <=1.2 is not >1.2 */
+    h ^= NSV_BIT_LT | NSV_BIT_EQ | NSV_BIT_GT | NSV_HOW_NOT;
+  }
+  if ((h & 7u) == NSV_BIT_GT) {
+    /* >1.2 is >=1.3, the next line; past UINT32_MAX nothing is above it. A carry takes
+       k to 0, which keeps the -0 below in either mode: >1.4294967295 is npm's
+       >=1.4294967296.0, and the first version above that is 2.0.0-0, not 2.0.0. */
+    if (k && (((k == 1u) || !(k = ++c->minor ? k : 0u)) ? ++c->major : 1u)) {
+      h ^= NSV_BIT_EQ;
+    } else {
+      h &= ~7u;
+    }
+  } else if (acc == NSV_BIT_EQ) { /* = and != take the whole line */
+    h |= NSV_BIT_GT;
+  }
+  /* =, !=, ^ and ~ share up to the numbers given; ^ only the first, if it is nonzero. */
+  keep = (h >> 3) & 7u;
+  if (keep == 4u) {
+    keep = ((k == 2u) && c->major) ? 1u : 3u;
+  }
+  h = (h & ~NSV_HOW_KEEP(7)) | NSV_HOW_KEEP((keep < k) ? keep : k);
+  c->src = "0";
+  c->pre_ofs = 0;
+  c->pre_len = !(k && ((h & (NSV_HOW_EXCL | NSV_HOW_NOT | NSV_BIT_LT | NSV_BIT_EQ)) ==
+                       (NSV_HOW_EXCL | NSV_BIT_EQ)));
+  *how = h;
+  return p;
+}
+
+int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags) {
+  char const *p, *e;
+  int ret = 0; /* 1 once a set matches, or the first OVERFLOW or TOO_LONG */
+  unsigned fresh;
+
+  if (!s || !v) {
+    return NSV_RET_ERR_ARG;
+  }
+  p = s;
+  e = s + len;
+  /* A set's state: bit 0 that a comparator rejected v, bit 1 that v may match, which
+     under EXCLUDE_PRE a pre-release v does only with a comparator with a pre-release on
+     its MAJOR.MINOR.PATCH. The set matches in state 2. */
+  fresh = (v->pre_len && (flags & NSV_RANGE_EXCLUDE_PRE)) ? 0u : 2u;
+  /* Every set is parsed, even once the answer is known, so a malformed range is always
+     an error. */
+  for (;;) {
+    unsigned state = fresh, glued = 0;
+    p = nsv_skip_ws(p, e);
+    do {
+      nsv_semver_t c;
+      char const *q;
+      size_t n;
+      unsigned how = NSV_BIT_EQ | NSV_HOW_KEEP(3) |
+                     ((flags & NSV_RANGE_EXCLUDE_PRE) ? NSV_HOW_EXCL : 0u);
+      unsigned keep, same;
+      int rc;
+      char const op = (p != e) ? *p : '\0';
+
+      /* The operator. ^ and ~ also hold MAJOR.MINOR.PATCH to the bound's, ~ through
+         MINOR and ^ through the leftmost nonzero: that is what their upper bounds come to
+         (~1.2.3 is <1.3.0-0, ^0.2.3 is <0.3.0-0), without computing one to overflow. */
+      if ((op == '<') || (op == '>')) {
+        how ^= NSV_BIT_EQ | NSV_HOW_KEEP(3) | ((op == '<') ? NSV_BIT_LT : NSV_BIT_GT);
+        if ((++p != e) && (*p == '=')) {
+          ++p;
+          how |= NSV_BIT_EQ;
+        }
+      } else if ((op == '^') || (op == '~')) {
+        how ^= NSV_BIT_GT | NSV_HOW_KEEP(3 ^ ((op == '~') ? 2u : 4u));
+        if ((++p != e) && (op == '~') && ((*p == '=') || (*p == '>'))) {
+          ++p; /* PEP 440's ~= and RubyGems' ~>, which agree with ~ on whole versions */
+          how |= NSV_HOW_WHOLE;
+        }
+      } else if ((op == '=') || (op == '!')) {
+        /* != and == are not npm's, but PEP 440's and Composer's */
+        if ((++p != e) && (*p == '=')) {
+          ++p;
+          how |= (op == '!') ? NSV_HOW_NOT : NSV_HOW_WHOLE;
+        } else if (op == '!') {
+          return NSV_RET_ERR_SYNTAX;
+        }
+      } else if (glued) { /* only an operator may follow a version with nothing between */
+        return NSV_RET_ERR_SYNTAX;
+      }
+
+      /* A version, npm's v1.2.3 among them, or failing that a partial one. */
+      p = nsv_skip_ws(p, e);
+      if ((p != e) && (*p == 'v')) {
+        ++p;
+      }
+      rc = nsv_parse_prefix(&c, p, (size_t)(e - p), &n);
+      if (rc == NSV_RET_ERR_SYNTAX) {
+        unsigned h = how; /* not how's own address, which would keep it out of a register */
+        q = nsv_parse_partial(&c, p, e, &h);
+        if (!q) {
+          return rc;
+        }
+        how = h;
+        n = (size_t)(q - p);
+        rc = (how & NSV_HOW_OVF) ? NSV_RET_ERR_OVERFLOW : NSV_RET_OK;
+      }
+      p += n;
+      q = nsv_skip_ws(p, e);
+      /* A version ends at a space, a tab, a comma, a '|', the next comparator's operator
+         or the end, and a comma stands between two comparators. */
+      if ((q != e) && (*q == ',')) {
+        q = nsv_skip_ws(q + 1, e);
+        if ((q == e) || (*q == '|')) {
+          return NSV_RET_ERR_SYNTAX;
+        }
+      }
+      glued = (q == p);
+      p = q;
+      if (rc) {
+        if (ret >= 0) {
+          ret = rc;
+        }
+        continue;
+      }
+      same = (v->major != c.major) ? 0u
+             : (v->minor != c.minor) ? 1u
+             : (v->patch != c.patch) ? 2u
+                                     : 3u;
+      keep = (how >> 3) & 7u;
+      if (keep > 3u) {
+        keep = c.major ? 1u : (c.minor ? 2u : 3u);
+      }
+      /* Whether v passes, against whether the test is negated (NSV_HOW_NOT). */
+      if (((((how >> nsv_cmp(v, &c)) & 1u) && (same >= keep)) ? 1u : 0u) ==
+          ((how / NSV_HOW_NOT) & 1u)) {
+        state |= 1u;
+      }
+      if (c.pre_len && (same == 3u) && !(how & (NSV_HOW_NOT | NSV_HOW_PARTIAL))) {
+        state |= 2u;
+      }
+    } while ((p != e) && (*p != '|'));
+    if ((state == 2u) && !ret) {
+      ret = 1;
+    }
+    if (p == e) {
+      return ret;
+    }
+    if ((++p == e) || (*p != '|')) {
+      return NSV_RET_ERR_SYNTAX;
+    }
+    ++p;
+  }
 }
 
 int nsv_copy(void *dst, size_t cap, nsv_semver_t const *s) {

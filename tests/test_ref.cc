@@ -3,6 +3,7 @@
 #include "corpus.h"
 #include "fuzz/gen.h"
 #include "nsv_doctest.h"
+#include "range_cases.h"
 #include "ref_semver.h"
 
 #include <iterator>
@@ -78,6 +79,24 @@ TEST_CASE("reference: precedence examples from the spec") {
       REQUIRE(ref::parse(order[j], &b) == ref::status::ok);
       INFO(order[i], " vs ", order[j]);
       REQUIRE(ref::cmp(a, b) == ((i < j) ? -1 : (i > j) ? 1 : 0));
+    }
+  }
+}
+
+TEST_CASE("reference: every range case, as nsv_range_match is held to") {
+  // The tables npm answered, but for its own special cases, and the != ones: the
+  // reference has to give the same answers, or it cannot judge anything else.
+  for (range_cases::table const &t : range_cases::k_all) {
+    for (unsigned i = 0; i < t.n; ++i) {
+      range_cases::match_case const &c = t.rows[i];
+      ref::version v;
+      REQUIRE(ref::parse(c.version, &v) == ref::status::ok);
+      for (bool excl : { false, true }) {
+        bool match = false;
+        INFO("\"", c.range, "\" against ", c.version, excl ? ", excluding pre-releases" : "");
+        REQUIRE(ref::range_match(c.range, v, excl, &match) == ref::status::ok);
+        REQUIRE(int(match) == (excl ? c.exclude_pre : c.plain));
+      }
     }
   }
 }

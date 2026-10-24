@@ -13,12 +13,18 @@
 #   BENCH_OPT       optimization for `make bench` (-O2)
 #   BENCH_ARGS      benchmark arguments for `make bench`, e.g. --quick or --filter cmp
 #   ARM_CC          arm-none-eabi-gcc for the Cortex-M targets; envy's by default
+#   NODE, NODE_SEMVER  Node.js and npm's semver package directory for `make npm-check`;
+#                   envy's by default
+#   NPM_ARGS        generated ranges for `make npm-check`, and a seed (200000 1)
+#   MUTATE_ARGS     tests/mutate.py arguments for `make mutate`, e.g. --jobs 4
 #   V=1             echo full commands
 #
 # Targets:
 #   test        (default) the unit tests, built twice: as configured, and as for a
 #               small MCU like an AVR, whose 16-bit int needs the length checks that
-#               -DNSV_INT_MAX=32767 compiles in, and division by shifts
+#               -DNSV_INT_MAX=32767 compiles in, division by shifts, and nsv_cmp's
+#               32-bit compare; and nanosemver.hpp compiled on its own as C++11 to
+#               C++23, with and without exceptions and RTTI
 #   fuzz        the standalone fuzz driver; any compiler
 #   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
@@ -28,6 +34,13 @@
 #   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function
 #   size-check  fails if the code outgrows size-budget.mk or calls into libc or libgcc
 #               for anything but memcpy
+#   ratchet     size-check, and fails if any Cortex-M workload takes more cycles than
+#               bench/cm/ratchet.txt allows
+#   ratchet-update  lowers size-budget.mk and bench/cm/ratchet.txt to what the code now
+#               takes; never raises them
+#   npm-check   nsv_range_match against npm's own semver package, under Node.js
+#   mutate      mutation testing: fails if the unit tests miss any change to
+#               nanosemver.c that tests/mutate-equivalent.txt does not explain
 #   clean       everything under build/ except the envy and uv package caches
 
 CFG  ?= Release
@@ -53,7 +66,7 @@ BUILD ?= build/$(CONFIG)
 
 # --- doctest, through envy --------------------------------------------------------
 # Only the test binaries need it.
-NO_DOCTEST_GOALS := clean bench bench-cm size size-check
+NO_DOCTEST_GOALS := clean bench bench-cm size size-check ratchet ratchet-update npm-check
 ifneq ($(if $(MAKECMDGOALS),$(filter-out $(NO_DOCTEST_GOALS),$(MAKECMDGOALS)),test),)
   ifeq ($(origin DOCTEST_H),undefined)
     DOCTEST_H := $(shell ./bin/envy -q product doctest_cpp_h)
@@ -108,7 +121,7 @@ CFLAGS   := -std=c99 $(WARN) $(WARN_C) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA
 CXXFLAGS := -std=c++20 $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS) \
             $(DOCTEST_INC)
 LDFLAGS  := $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS)
-INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1
+INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1 -DNSV_WIDE_CMP=0
 
 # --- sources ----------------------------------------------------------------------
 # Globbed, so a new test file needs no registration here; build.bat globs the same.
@@ -120,15 +133,24 @@ FUZZ_SRCS := nanosemver.c tests/fuzz/driver.cc tests/ref_semver.cc $(FUZZ_LIB_SR
 UNIT_OBJS := $(patsubst %,$(BUILD)/%.o,$(UNIT_SRCS))
 INT16_OBJS := $(patsubst %,$(BUILD)/int16/%.o,$(INT16_SRCS))
 FUZZ_OBJS := $(patsubst %,$(BUILD)/%.o,$(FUZZ_SRCS))
-# nanosemver.c also has to build as C11, though nothing links that object.
+# nanosemver.c also has to build as C11, and nanosemver.hpp on its own under every C++
+# standard from C++11, with and without exceptions and RTTI, though nothing links those
+# objects. Outside $(BUILD)/tests, where tests/mutate.py would link them.
 C11_OBJ := $(BUILD)/c11/nanosemver.c.o
-ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ))
+HPP_SRC := tests/hpp/standalone.cc
+HPP_STDS := c++11 c++14 c++17 c++20 c++23
+HPP_OBJS := $(patsubst %,$(BUILD)/hpp/%.o,$(HPP_STDS))
+HPP_NOEXC_OBJS := $(patsubst %,$(BUILD)/hpp/%-noexcept.o,$(HPP_STDS))
+ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ) $(HPP_OBJS) \
+                   $(HPP_NOEXC_OBJS))
 
 # --- rules ------------------------------------------------------------------------
-.PHONY: test fuzz libfuzzer coverage bench bench-cm size size-check clean FORCE
+.PHONY: test fuzz libfuzzer coverage bench bench-cm size size-check ratchet ratchet-update \
+        npm-check mutate clean FORCE
 .DEFAULT_GOAL := test
 
-test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ)
+test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ) $(HPP_OBJS) \
+      $(HPP_NOEXC_OBJS)
 
 $(BUILD)/int16/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
@@ -144,6 +166,19 @@ $(BUILD)/c11/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(MSG) CC "$< (c11)"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -c $< -o $@
+
+# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI.
+HPP_FLAGS := $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(EXTRA_FLAGS)
+
+$(HPP_OBJS): $(BUILD)/hpp/%.o: $(HPP_SRC) Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX "$< ($*)"
+	$(Q)$(CXX) $(CPPFLAGS) -std=$* $(HPP_FLAGS) -c $< -o $@
+
+$(HPP_NOEXC_OBJS): $(BUILD)/hpp/%-noexcept.o: $(HPP_SRC) Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX "$< ($*, no exceptions or RTTI)"
+	$(Q)$(CXX) $(CPPFLAGS) -std=$* $(HPP_FLAGS) -fno-exceptions -fno-rtti -c $< -o $@
 
 $(BUILD)/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
@@ -254,7 +289,8 @@ BENCH_BASE ?= origin/main
 # BENCH_BASE's nanosemver.c and .h, rewritten only when they differ so the objects
 # built from them stay up to date. Both benchmarks link it beside this tree's.
 BENCH_SRC := build/bench-base/$(subst /,_,$(BENCH_BASE))
-BENCH_RENAME := $(foreach f,parse cmp copy format get_pre get_build,-Dnsv_$(f)=nsvbase_$(f))
+NSV_API := parse parse_prefix cmp range_match copy format get_pre get_build
+BENCH_RENAME := $(foreach f,$(NSV_API),-Dnsv_$(f)=nsvbase_$(f))
 
 FORCE:
 
@@ -273,7 +309,12 @@ BENCH_ARGS ?=
 BENCH_BUILD := build/bench/$(notdir $(firstword $(CC)))$(subst $(space),,$(BENCH_OPT))-$(ARCH)
 BENCH_FLAGS := $(BENCH_OPT) $(ARCH_FLAGS) -I.
 
-$(BENCH_BUILD)/base.o: $(BENCH_SRC)/nanosemver.c
+# Named for BENCH_BASE, so switching it never links another revision's objects.
+BENCH_BASE_OBJ := $(BENCH_BUILD)/base-$(notdir $(BENCH_SRC)).o
+BENCH_STUB_OBJ := $(BENCH_BUILD)/base_stub-$(notdir $(BENCH_SRC)).o
+BENCH_BIN := $(BENCH_BUILD)/nsv_bench-$(notdir $(BENCH_SRC))
+
+$(BENCH_BASE_OBJ): $(BENCH_SRC)/nanosemver.c
 	@mkdir -p $(dir $@)
 	$(MSG) CC "$< ($(BENCH_BASE))"
 	$(Q)$(CC) -std=c99 $(BENCH_FLAGS) $(BENCH_RENAME) -c $< -o $@
@@ -289,11 +330,21 @@ $(BENCH_BUILD)/bench.o: bench/bench.cc nanosemver.h Makefile
 	$(Q)$(CXX) -std=c++20 $(WARN) $(WARN_CXX) $(BENCH_FLAGS) \
 		-DNSV_BENCH_BASE='"$(BENCH_BASE)"' -c $< -o $@
 
-$(BENCH_BUILD)/nsv_bench: $(BENCH_BUILD)/bench.o $(BENCH_BUILD)/nanosemver.o $(BENCH_BUILD)/base.o
+# Whether BENCH_BASE has nsv_range_match and nsv_parse_prefix decides which stand-ins
+# bench/base_stub.c compiles.
+$(BENCH_STUB_OBJ): bench/base_stub.c $(BENCH_SRC)/nanosemver.c
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$<"
+	$(Q)$(CC) -std=c99 $(WARN) $(WARN_C) $(BENCH_FLAGS) \
+		-DNSV_BASE_HAS_RANGE=$$(grep -q nsv_range_match $(BENCH_SRC)/nanosemver.h && echo 1 || echo 0) \
+		-c $< -o $@
+
+$(BENCH_BIN): $(BENCH_BUILD)/bench.o $(BENCH_BUILD)/nanosemver.o $(BENCH_BASE_OBJ) \
+		$(BENCH_STUB_OBJ)
 	$(MSG) LINK $@
 	$(Q)$(CXX) $(ARCH_FLAGS) $^ -o $@
 
-bench: $(BENCH_BUILD)/nsv_bench
+bench: $(BENCH_BIN)
 ifneq ($(SAN),)
 	$(error a benchmark built with SAN=$(SAN) measures the sanitizer)
 endif
@@ -326,7 +377,7 @@ $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o: $(CM_BUILD)/%.o: nanosemver.c nanosemver.h Ma
 # Bare images for bench/cm/cmcount.py, which calls the API directly. newlib-nano and
 # libgcc supply whatever the code pulls in, and count with it.
 CM_LINK := -specs=nano.specs -nostartfiles -T bench/cm/link.ld -Wl,--gc-sections \
-	$(foreach f,parse cmp copy format get_pre get_build,-Wl,-u,nsv_$(f)) -Wl,-e,nsv_parse
+	$(foreach f,$(NSV_API),-Wl,-u,nsv_$(f)) -Wl,-e,nsv_parse
 
 $(CM_BUILD)/new-m0.elf $(CM_BUILD)/new-m4.elf: $(CM_BUILD)/new-%.elf: nanosemver.c \
 		nanosemver.h bench/cm/link.ld Makefile
@@ -367,9 +418,75 @@ size-check: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
 		t=$$($(call cm_bytes,$$o)) || { echo "$$o: no size"; exit 1; }; \
 		echo "$$o: $$t bytes (budget $$max)"; \
 		if [ $$t -gt $$max ]; then echo "SIZE BUDGET EXCEEDED"; exit 1; fi; \
+		if [ $$t -lt $$max ]; then echo "  under by $$((max - t)): make ratchet-update"; fi; \
 		u=$$("$(ARM_NM)" --undefined-only $$o | awk '{ print $$2 }' | grep -vx memcpy); \
 		if [ -n "$$u" ]; then echo "$$o calls more than memcpy:"; echo "$$u"; exit 1; fi; \
 	done
+
+# The ratchet: code size (size-budget.mk) and Cortex-M cycles per call, workload by
+# workload (bench/cm/ratchet.txt), neither ever to grow. ratchet-update lowers both to
+# what they now are; raising either is a deliberate edit.
+RATCHET := bench/cm/ratchet.txt
+cm_name = $$( [ $$c = m0 ] && echo Cortex-M0+ || echo Cortex-M4 )
+
+ratchet: size-check $(CM_BUILD)/new-m0.elf $(CM_BUILD)/new-m4.elf
+	@for c in m0 m4; do \
+		echo; echo "$(cm_name), -Os: cycles per call against $(RATCHET)"; \
+		$(UV) run --quiet bench/cm/cmcount.py --cpu $$c --objdump "$(ARM_OBJDUMP)" \
+			--ratchet $(RATCHET) $(CM_BUILD)/new-$$c.elf || exit 1; \
+	done
+
+ratchet-update: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o $(CM_BUILD)/new-m0.elf \
+		$(CM_BUILD)/new-m4.elf
+	@for c in m0:M0 m4:M4; do \
+		v=NSV_SIZE_$${c#*:}_MAX; t=$$($(call cm_bytes,$(CM_BUILD)/$${c%%:*}.o)) || exit 1; \
+		old=$$(sed -n "s/^$$v := //p" size-budget.mk); \
+		if [ $$t -gt $$old ]; then echo "$$v: $$t is over $$old"; exit 1; fi; \
+		if [ $$t -lt $$old ]; then \
+			sed -i.bak "s/^$$v := .*/$$v := $$t/" size-budget.mk && rm -f size-budget.mk.bak; \
+			echo "$$v: $$old -> $$t"; \
+		fi; \
+	done
+	@for c in m0 m4; do \
+		echo; echo "$(cm_name), -Os: cycles per call, lowering $(RATCHET)"; \
+		$(UV) run --quiet bench/cm/cmcount.py --cpu $$c --objdump "$(ARM_OBJDUMP)" \
+			--ratchet $(RATCHET) --update $(CM_BUILD)/new-$$c.elf || exit 1; \
+	done
+
+# --- npm --------------------------------------------------------------------------
+# There is no range standard, but npm's grammar is the nearest thing, and node-semver its
+# reference. Node.js and the package come through envy, resolved only for this goal.
+NODE ?= $(eval NODE := $$(call envy_product,node))$(NODE)
+NODE_SEMVER ?= $(eval NODE_SEMVER := $$(call envy_product,node_semver))$(NODE_SEMVER)
+NPM_BUILD := build/npm
+NPM_ARGS ?= 200000 1
+
+$(NPM_BUILD)/nanosemver.o: nanosemver.c nanosemver.h Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< (npm)"
+	$(Q)$(CC) -std=c99 $(WARN) $(WARN_C) -O2 -I. -c $< -o $@
+
+$(NPM_BUILD)/nsv_npm_emit: tests/npm/emit.cc tests/fuzz/gen.cc tests/fuzz/gen.h tests/corpus.h \
+		tests/range_cases.h $(NPM_BUILD)/nanosemver.o Makefile
+	$(MSG) LINK $@
+	$(Q)$(CXX) -std=c++20 $(WARN) $(WARN_CXX) -O2 -I. tests/npm/emit.cc tests/fuzz/gen.cc \
+		$(NPM_BUILD)/nanosemver.o -o $@
+
+# Through a file, not a pipe: sh has no pipefail everywhere.
+npm-check: $(NPM_BUILD)/nsv_npm_emit
+	$(Q)$< $(NPM_ARGS) > $(NPM_BUILD)/cases.jsonl
+	$(Q)SEMVER="$(NODE_SEMVER)" "$(NODE)" tests/npm/judge.js < $(NPM_BUILD)/cases.jsonl
+
+# --- mutation testing ---------------------------------------------------------------
+# One change at a time to nanosemver.c, each built against this configuration's test
+# objects, both ways, and for its ARCH. uv provides the Python.
+MUTATE_ARGS ?=
+mutate: $(BUILD)/nsv_unittests $(BUILD)/nsv_unittests_int16
+ifneq ($(SAN),)
+	$(error mutants link without the sanitizer runtime; build without SAN)
+endif
+	$(Q)CC="$(CC)" CXX="$(CXX)" ARCH_FLAGS="$(ARCH_FLAGS)" $(UV) run --quiet tests/mutate.py \
+		$(BUILD) $(MUTATE_ARGS)
 
 # Everything under build/ except the package caches: refetching them is not what
 # anyone means by `make clean`. `rm -rf build` for that.

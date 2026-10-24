@@ -55,6 +55,7 @@ int emit_corpus(char const *dir) {
   for (char const *s : corpus::k_valid) inputs.emplace_back(s);
   for (char const *s : corpus::k_overflow) inputs.emplace_back(s);
   for (char const *s : corpus::k_invalid) inputs.emplace_back(s);
+  for (char const *s : corpus::k_ranges) inputs.push_back(std::string(s) + "\n1.2.3-rc.1");
   nsv_fuzz::rng r(1);
   for (int i = 0; i < 500; ++i) {
     std::string s = nsv_fuzz::gen_input(r);

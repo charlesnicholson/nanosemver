@@ -28,11 +28,13 @@ struct free_deleter {
 };
 using blob = std::unique_ptr<nsv_semver_t, free_deleter>;
 
+// Filled with junk, so nothing passes for having been written when malloc zeroed it.
 blob alloc_blob(size_t n) {
   blob b(static_cast<nsv_semver_t *>(std::malloc(n)));
   if (!b) {
     std::abort();
   }
+  std::memset(static_cast<void *>(b.get()), 0xA5, n);
   return b;
 }
 
@@ -126,8 +128,70 @@ char const *check_parsed(nsv_semver_t const &v, ref::version const &rv, char con
   return nullptr;
 }
 
+// The reference tries every length, so past this only the lengths near nanosemver's
+// answer, and the whole string, are tried.
+constexpr size_t k_prefix_exhaustive = 512;
+
+// nsv_parse_prefix agrees with the longest prefix the reference accepts.
+char const *check_prefix(char const *p, size_t n) {
+  nsv_semver_t out{};
+  unsigned char before[sizeof(out)];
+  std::memset(&out, 0xA5, sizeof(out));
+  std::memcpy(before, &out, sizeof(out));
+  size_t got = 12345;
+  int const rc = nsv_parse_prefix(&out, p, n, &got);
+  std::string_view const s(p, n);
+  ref::version rv;
+  if (n <= k_prefix_exhaustive) {
+    size_t want = 0;
+    FUZZ_REQUIRE(rc == expected_rc(ref::parse_prefix(s, &rv, &want)));
+    FUZZ_REQUIRE(got == want);
+  } else {
+    FUZZ_REQUIRE(got <= n);
+    FUZZ_REQUIRE((rc == NSV_RET_ERR_SYNTAX) == (got == 0));
+    if (got) {
+      FUZZ_REQUIRE(rc == expected_rc(ref::parse(s.substr(0, got), &rv)));
+    }
+    for (size_t k = got + 1; (k <= n) && (k <= got + 64); ++k) {
+      FUZZ_REQUIRE(ref::parse(s.substr(0, k), &rv) == ref::status::syntax);
+    }
+    FUZZ_REQUIRE((got == n) || (ref::parse(s, &rv) == ref::status::syntax));
+  }
+  if (rc != NSV_RET_OK) {
+    FUZZ_REQUIRE(!std::memcmp(&out, before, sizeof(out)));
+    return nullptr;
+  }
+  nsv_semver_t whole{};
+  FUZZ_REQUIRE(nsv_parse(&whole, p, got) == NSV_RET_OK);
+  FUZZ_REQUIRE((out.major == whole.major) && (out.minor == whole.minor) &&
+               (out.patch == whole.patch) && (out.src == whole.src));
+  FUZZ_REQUIRE((out.pre_ofs == whole.pre_ofs) && (out.pre_len == whole.pre_len));
+  FUZZ_REQUIRE((out.build_ofs == whole.build_ofs) && (out.build_len == whole.build_len));
+  return nullptr;
+}
+
+// nsv_range_match on range r against v, both ways of ranking pre-releases.
+char const *check_range(char const *r, size_t n, nsv_semver_t const &v,
+                        ref::version const &rv) {
+  for (unsigned flags : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {
+    bool match = false;
+    ref::status const st =
+        ref::range_match(std::string_view(r, n), rv, (flags & NSV_RANGE_EXCLUDE_PRE) != 0, &match);
+    int const rc = nsv_range_match(r, n, &v, flags);
+    if (st == ref::status::ok) {
+      FUZZ_REQUIRE(rc == int(match));
+    } else {
+      FUZZ_REQUIRE(rc == expected_rc(st));
+    }
+  }
+  return nullptr;
+}
+
 char const *check_one(char const *p, size_t n, nsv_semver_t *v, ref::version *rv,
                       bool *parsed) {
+  if (char const *f = check_prefix(p, n)) {
+    return f;
+  }
   nsv_semver_t out{};
   unsigned char before[sizeof(out)];
   std::memset(&out, 0xA5, sizeof(out));
@@ -174,6 +238,9 @@ char const *check(std::uint8_t const *data, std::size_t size) {
     FUZZ_REQUIRE(c == ref::cmp(ra, rb) + 1);
     FUZZ_REQUIRE(nsv_cmp(&vb, &va) == 2 - c);
     FUZZ_REQUIRE(nsv_cmp(&va, &va) == NSV_CMP_EQ);
+  }
+  if (okb) {
+    return check_range(pa, a.size(), vb, rb);
   }
   return nullptr;
 }

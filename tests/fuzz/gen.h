@@ -30,7 +30,7 @@ class rng {
 std::string gen_version(rng &r);
 
 // One fuzz input: a version, or two related versions separated by '\n' so the
-// comparison has near-misses to rank.
+// comparison has near-misses to rank, or a range and a version near its bounds.
 std::string gen_input(rng &r);
 
 }  // namespace nsv_fuzz

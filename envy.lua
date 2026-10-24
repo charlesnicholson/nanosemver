@@ -1,8 +1,9 @@
 -- nanosemver's toolchain manifest, and envy's root marker. The unit tests need
 -- doctest.h. `make size` needs the Arm GNU toolchain, and `make bench-cm` that and uv,
--- which provisions the Python and packages its emulator needs. Nothing else fetches
--- either. The cache lives under build/ with everything else this repo generates;
--- `make clean` spares it, `rm -rf build` does not.
+-- which provisions the Python and packages its emulator needs. `make npm-check` needs
+-- Node.js and npm's semver. Nothing else fetches any of them. The cache lives under
+-- build/ with everything else this repo generates; `make clean` spares it, `rm -rf
+-- build` does not.
 
 -- @envy schema "1"
 -- @envy version "0.4.12"
@@ -31,4 +32,7 @@ PACKAGES = {
 
   -- Runs bench/cm/cmcount.py, whose pinned dependencies it fetches into its own cache.
   { spec = "envy.uv@r3", bundle = "envy", options = { version = "0.13.1" } },
+
+  -- Node.js and npm's semver package, for `make npm-check`. Not in the envy bundle.
+  { spec = "local.node@r0", source = "envy/local.node.lua" },
 }

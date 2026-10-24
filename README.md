@@ -4,10 +4,10 @@
 [![](https://img.shields.io/badge/license-public_domain-brightgreen.svg)](https://github.com/charlesnicholson/nanosemver/blob/main/LICENSE)
 [![](https://img.shields.io/badge/license-0BSD-brightgreen)](https://github.com/charlesnicholson/nanosemver/blob/main/LICENSE)
 
-Parse, compare and format [Semantic Versioning 2.0.0](https://semver.org) strings in C99.
-Parsing is done in place: it never allocates, never copies, and reads only the bytes you
-give it. Two files, `nanosemver.h` and `nanosemver.c`, needing nothing from the C
-library beyond `memcpy`.
+Parse, compare, format and match ranges of [Semantic Versioning 2.0.0](https://semver.org)
+strings in C99. Parsing is done in place: it never allocates, never copies, and reads only
+the bytes you give it. Two files, `nanosemver.h` and `nanosemver.c`, needing nothing from
+the C library beyond `memcpy`; for C++, an optional third, the header `nanosemver.hpp`.
 
 ```c
 #include "nanosemver.h"
@@ -16,6 +16,7 @@ nsv_semver_t a, b;
 nsv_parse(&a, "1.0.0-rc.1", 10);
 nsv_parse(&b, "1.0.0", 5);
 if (nsv_cmp(&a, &b) == NSV_CMP_LT) { /* a pre-release ranks below its release */ }
+if (nsv_range_match(">=1.0.0 <2.0.0-0 || ^3.1.0", 26, &b, 0) == 1) { /* b is in range */ }
 ```
 
 ## Three kinds of `nsv_semver_t`
@@ -57,13 +58,19 @@ Every function returns `int`: `>= 0` is success, often a length, and `< 0` is an
 | Function | Returns |
 |---|---|
 | `nsv_parse(out, s, len)` | `NSV_RET_OK`; `*out` is untouched on error |
+| `nsv_parse_prefix(out, s, len, &n)` | as `nsv_parse`, for the version at the start of `s`; `n` is its length |
 | `nsv_cmp(a, b)` | `NSV_CMP_LT` (0), `NSV_CMP_EQ` (1) or `NSV_CMP_GT` (2) |
+| `nsv_range_match(s, len, v, flags)` | 1 if `v` is in the range, 0 if not |
 | `nsv_copy(dst, cap, s)` | bytes written; `dst == NULL` asks for the size |
 | `nsv_format(dst, n, s)` | length without the NUL; `dst == NULL` asks for it |
 | `nsv_get_pre(s, &str)` / `nsv_get_build(s, &str)` | the length; `*str` is `""` when absent |
 
 - `nsv_parse` takes a pointer and a length, so it parses substrings without a NUL. The
   whole range must be a version: no leading `v`, no whitespace.
+- `nsv_parse_prefix` parses the longest prefix that is a version, like `from_chars`, and
+  leaves what follows to you: `"1.2.3, 2.0.0"` gives 1.2.3, but so do `"1.2.3.4"` and
+  `"1.2.3x"`, and `"1.2.03"` gives 1.2.0. Check the byte after it when a version must
+  end there.
 - `nsv_cmp` follows semver precedence and ignores build metadata, so `NSV_CMP_EQ` does not
   mean identical. `nsv_cmp(a, b) - 1` is a `qsort`-style comparator.
 - `nsv_format` never truncates: a cut-off version string is a different version. Too small
@@ -84,59 +91,235 @@ The spec sets no limits on length or numeric size; nanosemver's are `uint32_t` n
 and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` and
 `TOO_LONG` only ever describe valid semver.
 
-## Performance
+## C++
 
-`nsv_parse` reads each byte once and never divides: overflow is caught by a comparison
-per digit. `nsv_cmp` settles most comparisons on the numbers alone; when the pre-release
-decides, it finds the first byte where the two differ and classifies only the identifier
-around it, instead of splitting both into identifiers. On cores without a fast divide,
-`nsv_format` divides by shifts and adds, so nothing from libgcc is linked in: on every
-Cortex-M, `memcpy` is the only call out of `nanosemver.c`.
+`nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
+still built as C. Its `nsv::SemVer` owns its own copy, one allocation holding the header
+and both strings, so it never dangles the way a view can. Errors come back without
+exceptions: whatever can fail returns an `NSV_RET_*` code and leaves the version as it
+was. It needs C++11 or later and nothing from the standard library, and builds without
+exceptions or RTTI.
 
-Nanoseconds per call on an Apple M3 Pro at `-O2`; the Linux compilers ran in a VM on the
-same machine. Each workload is 1024 versions from a fixed-seed generator in
-`bench/bench.cc`: mostly one- and two-digit numbers, registry-style tags, hashes and
-timestamps.
+```cpp
+#include "nanosemver.hpp"
 
-| Workload | Apple clang 21 | gcc 15 | clang 22 |
-|---|---:|---:|---:|
-| `nsv_parse`, releases (`4.17.21`) | 7.5 | 9.3 | 7.2 |
-| `nsv_parse`, pre-releases (`2.0.0-beta.3`) | 12.9 | 14.5 | 12.7 |
-| `nsv_parse`, both (`1.0.0-rc.1+sha.5114f85`) | 22.0 | 25.4 | 22.7 |
-| `nsv_parse`, 40-character hashes, 58 bytes | 38.3 | 43.4 | 39.8 |
-| `nsv_cmp`, the numbers decide | 1.1 | 1.1 | 1.1 |
-| `nsv_cmp`, the pre-release decides | 5.2 | 4.7 | 4.9 |
-| `nsv_format` | 8.3 | 8.0 | 7.5 |
-| `std::sort` of all 1024, using `nsv_cmp` | 16.7 µs | 14.6 µs | 17.2 µs |
+nsv::SemVer v, w;  // 0.0.0, allocating nothing
+if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
+w.parse("1.4.0");
+bool const older = v < w;  // true: a pre-release ranks below its release
+int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0 on error
+char buf[32];
+int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
+char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
+```
 
-Cycles per call on Cortex-M at `-Os`, with the same inputs, counted in an emulator
-(exact instruction counts, cycles from a simple zero-wait-state model), and code size:
+- `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
+  does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
+  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer::from(c, rc)` makes a new
+  version of one, its error in `rc`; there is no constructor from one, since a
+  constructor could not report that error. (`NSV_SEMVER_LIT` itself needs C++20 in C++,
+  for its designated initializers.)
+- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, so `==` ignores build
+  metadata: `1.0.0+a == 1.0.0+b`.
+- `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
+  return what `nsv_range_match` does: 1, 0, or an `NSV_RET_ERR_*` code. Test for `== 1`,
+  since an error is nonzero too.
+- `major()`, `minor()` and `patch()` are the numbers; `pre()` and `build()` are
+  NUL-terminated, and `""` when absent; `format(dst, n)` is `nsv_format`.
+- `semver()` is the version for the C API: pass `&v.semver()`, but never copy it, since
+  it is a copy's header.
+- Copying a version copies its allocation, moving hands it over, and a moved-from version
+  is `0.0.0`. Allocation is `::operator new`'s, so running out of memory throws
+  `std::bad_alloc`, or without exceptions ends the program.
 
-| | Cortex-M0+ | Cortex-M4 |
-|---|---:|---:|
-| `nsv_parse`, releases | 227 | 239 |
-| `nsv_parse`, pre-releases | 406 | 416 |
-| `nsv_parse`, both | 656 | 673 |
-| `nsv_parse`, 40-character hashes | 1090 | 1161 |
-| `nsv_cmp`, the numbers decide | 24 | 26 |
-| `nsv_cmp`, the pre-release decides | 169 | 152 |
-| `nsv_format` | 322 | 240 |
-| `nanosemver.o`, bytes of code and data | 1260 | 1274 |
+## Comparing versions
 
-`NSV_SOFT_DIV` selects the shift-and-add divide: 1 by default on Cortex-M0/M0+/M1, AVR,
-MSP430 and RISC-V without M, 0 elsewhere. Define it to override.
+`nsv_cmp` ranks two versions by semver precedence (semver.org §11):
 
-### Measuring
+1. `MAJOR`, `MINOR` and `PATCH` compare as numbers, in that order: `1.9.0 < 1.10.0 < 2.0.0`.
+2. A pre-release ranks below its release: `1.0.0-rc.1 < 1.0.0`.
+3. Two pre-releases of the same version compare identifier by identifier, left to right:
+   - numeric identifiers as numbers: `1.0.0-beta.2 < 1.0.0-beta.11`;
+   - alphanumeric ones in ASCII order, so uppercase first: `1.0.0-RC < 1.0.0-rc`;
+   - a numeric identifier below an alphanumeric one: `1.0.0-1 < 1.0.0-alpha`;
+   - and when one runs out first, it ranks below: `1.0.0-alpha < 1.0.0-alpha.1`.
+4. Build metadata never counts: `1.0.0+a` and `1.0.0+b` are `NSV_CMP_EQ`, equal in
+   precedence though not identical.
 
-`make bench` builds this tree's `nanosemver.c` and `BENCH_BASE`'s (default `origin/main`)
-into one binary and times them interleaved, alternating which goes first, so thermal and
-frequency drift hit both alike; every workload also checksums both sides' results, and a
-mismatch voids the run. `make bench-cm` runs the same workloads through bare Cortex-M0+
-and Cortex-M4 images of both in the [Unicorn](https://www.unicorn-engine.org) emulator.
-`make size` prints the Cortex-M code size function by function, and `make size-check`
-fails if it outgrows `size-budget.mk` or calls anything but `memcpy`. The Arm toolchain
-and [uv](https://docs.astral.sh/uv/), which provisions the emulator, come through envy
-on first use; `make` never touches them.
+semver.org's own example, in order:
+`1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 <
+1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0`.
+
+## Ranges
+
+`nsv_range_match(s, len, v, flags)` answers whether `v` is in a range like
+`>=1.2.0 <1.4.0 || ^2.1.0`. There is no range standard: semver.org defines versions and
+precedence, nothing more. The nearest thing is npm's
+[grammar](https://github.com/npm/node-semver#range-grammar), which Composer and Conan
+follow closely too. nanosemver takes npm's, without hyphen ranges, plus `!=` and the few
+spellings from other grammars that mean the same in all of them. npm reads every range
+nanosemver accepts, spelled as npm's, the same way.
+
+### Syntax
+
+- A **range** is one or more comparator sets separated by `||`, with optional spaces or
+  tabs around it. `v` is in the range if it is in any set.
+- A **set** is one or more comparators separated by spaces, tabs or a comma, or by
+  nothing before an operator. `v` is in the set if it satisfies every comparator in it.
+- A **comparator** is an optional operator, optional spaces or tabs, and a version:
+  `=`, `<`, `<=`, `>`, `>=`, `!=`, `~` or `^`, or another grammar's `==`, `~=` or `~>`,
+  then `1.2.3`; no operator means `=`.
+- The **version** is a full semver 2.0.0 version, or a **partial** one: one to three
+  components, numbers then wildcards (`x`, `X` or `*`), with no pre-release or build, as
+  in `1`, `1.2`, `1.x`, `1.2.*` and `*`. Either may start with a `v`, as in npm:
+  `v1.2.3`, `>=v1.2`.
+- The whole string must parse: an empty range, a stray `|` or comma, and anything left
+  over are all `NSV_RET_ERR_SYNTAX`, however `v` compares.
+
+Spaces and commas only ever separate: they never change what anything means. A version
+ends where its characters do, so `>=1.0.0<2.0.0` is `>=1.0.0 <2.0.0` and
+`>=1.2, <1.5` is `>=1.2 <1.5`; a space is needed only where two things would otherwise
+run together, as two versions would. That rule is why npm's hyphen ranges are out:
+`1.2.3 - 2.3.4` is a range only because of its spaces, and `1.2.3-2.3.4` is one
+pre-release version.
+
+### Whole versions
+
+| Comparator | Means | Matches | Does not match |
+|---|---|---|---|
+| `1.2.3`, `=1.2.3`, `==1.2.3` | equal precedence | `1.2.3`, `1.2.3+build` | `1.2.4`, `1.2.3-rc` |
+| `!=1.2.3` | not equal | `1.2.4`, `1.2.3-rc` | `1.2.3`, `1.2.3+b` |
+| `<1.2.3` | below | `1.2.2`, `1.2.3-rc` | `1.2.3` |
+| `<=1.2.3` | at or below | `1.2.3` | `1.2.4-0` |
+| `>1.2.3` | above | `1.2.4-0`, `1.3.0` | `1.2.3+b` |
+| `>=1.2.3` | at or above | `1.2.3` | `1.2.3-rc` |
+| `~1.2.3`, `~=1.2.3`, `~>1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` | `1.2.9` | `1.2.2`, `1.3.0-0` |
+| `^1.2.3` | `>=1.2.3 <2.0.0-0`: the same leftmost nonzero number | `1.9.0` | `2.0.0-rc.1` |
+| `^0.2.3` | `>=0.2.3 <0.3.0-0` | `0.2.9` | `0.3.0` |
+| `^0.0.3` | `>=0.0.3 <0.0.4-0` | `0.0.3` | `0.0.4` |
+
+`X.Y.Z-0` is the lowest version with that core, below all its pre-releases, so `<2.0.0-0`
+stops below every 2.0.0 pre-release, which `<2.0.0` does not.
+
+### Partial versions
+
+A partial version stands for its whole line, pre-releases and all, and the operators
+compare lines:
+
+| Comparator | Means | Matches | Does not match |
+|---|---|---|---|
+| `1.2`, `1.2.x`, `=1.2` | `>=1.2.0-0 <1.3.0-0` | `1.2.0-beta`, `1.2.99` | `1.3.0-0` |
+| `1`, `1.x`, `1.*.*` | `>=1.0.0-0 <2.0.0-0` | `1.0.0-0`, `1.99.0` | `2.0.0-0` |
+| `*`, `x` | everything | `0.0.0-0`, `9.9.9` | |
+| `!=1.4.x` | off the 1.4 line | `1.3.9`, `1.5.0` | `1.4.0-0`, `1.4.99` |
+| `<1.2` | below the 1.2 line: `<1.2.0-0` | `1.1.99` | `1.2.0-0` |
+| `<=1.2` | up to the end of it: `<1.3.0-0` | `1.2.99` | `1.3.0-0` |
+| `>1.2` | above it: `>=1.3.0-0` | `1.3.0-0` | `1.2.99` |
+| `>=1.2` | from its start: `>=1.2.0-0` | `1.2.0-beta` | `1.1.9` |
+| `~1.2`, `~1` | the line, like `1.2` and `1` | `1.2.9`; `1.9.9` | `1.3.0-0`; `2.0.0-0` |
+| `^1.2` | `>=1.2.0-0 <2.0.0-0` | `1.9.9` | `2.0.0-0` |
+| `^0.2` | `>=0.2.0-0 <0.3.0-0` | `0.2.9` | `0.3.0-0` |
+| `^0.0`, `^0` | `<0.1.0-0`, `<1.0.0-0` | `0.0.9`; `0.9.9` | `0.1.0`; `1.0.0` |
+
+At the top of the range, `>1.4294967295` carries into the next number, so it matches
+`2.0.0`, and nothing is above `>4294967295`. A carried bound keeps its `-0` even under
+`NSV_RANGE_EXCLUDE_PRE`: npm's is `>=1.4294967296.0`, which every 2.0.0 pre-release is
+above.
+
+`==`, `~=` and `~>` take no partial version, and `!=` one only with a wildcard: the
+grammars those operators come from read `==1.2` and `!=1.2` as 1.2.0, and `~=1.2` and
+`~>1.2` as `>=1.2 <2`, where npm's terms would make each the 1.2 line. Rather than guess,
+each is a syntax error.
+
+### Combining
+
+| Range | Matches | Does not match |
+|---|---|---|
+| `>=1.2.0 <1.4.0 \|\| ^2.1.0` | `1.3.5`, `2.5.0` | `2.0.0` |
+| `>=1.2 !=1.3.1 <2` | `1.3.2` | `1.3.1` |
+| `>= 1.2.3 < 2` | `1.5.0` | `2.0.0` |
+| `>=1.2, <1.5` | `1.4.9` | `1.5.0` |
+| `>=1.0.0<2.0.0 \|\| v3.0.0` | `3.0.0` | `2.0.0` |
+
+### Pre-releases
+
+By default a pre-release is just a version that ranks below its release, as with npm's
+`includePrerelease`. `NSV_RANGE_EXCLUDE_PRE` gives npm's default instead:
+
+- a pre-release `v` is in a set only if a comparator in it names a pre-release of the same
+  `MAJOR.MINOR.PATCH`; `!=` and partial versions never do;
+- and a partial version's lower bound is its `.0` release, so `>=1.2` is `>=1.2.0`.
+
+| Range | Version | Default | `NSV_RANGE_EXCLUDE_PRE` |
+|---|---|---:|---:|
+| `>=1.0.0 <2.0.0` | `1.5.0-beta` | 1 | 0 |
+| `>=1.0.0 <2.0.0` | `2.0.0-rc.1` | 1 | 0 |
+| `>=1.0.0 <2.0.0-0` | `2.0.0-rc.1` | 0 | 0 |
+| `>=1.5.0-beta <2.0.0` | `1.5.0-rc.1` | 1 | 1 |
+| `>=1.5.0-beta <2.0.0` | `1.6.0-rc.1` | 1 | 0 |
+| `^1.2.3-beta.2` | `1.2.3-beta.4` | 1 | 1 |
+| `^1.2.3-beta.2` | `1.2.4-beta.2` | 1 | 0 |
+| `1.2` | `1.2.0-beta` | 1 | 0 |
+| `>=1.2 <1.2.0-rc.5` | `1.2.0-beta` | 1 | 0 |
+| `!=1.2.3-rc.1` | `1.2.3-rc.2` | 1 | 0 |
+
+The flag only ever takes matches away, and never from a release.
+
+### Errors
+
+`NSV_RET_ERR_SYNTAX` for a malformed range wins over everything. Otherwise a version in
+the range beyond nanosemver's limits, a number past `UINT32_MAX` (`<4294967296.0.0`,
+`>=4294967296`) or a version longer than 65535 bytes, is `NSV_RET_ERR_OVERFLOW` or
+`NSV_RET_ERR_TOO_LONG`, the first such in the range, whether or not `v` would match.
+
+### Coming from another grammar
+
+Other grammars' spellings that mean the same in all of them are taken as they are:
+
+| Written | Grammar | Same as |
+|---|---|---|
+| `>=1.2, <1.5` | Cargo, Python (PEP 440), Composer | `>=1.2 <1.5` |
+| `==1.2.3` | Python, Composer | `=1.2.3` |
+| `~=1.4.5` | Python | `~1.4.5` |
+| `~> 1.4.5` | RubyGems, Hex | `~1.4.5` |
+| `v1.2.3`, `=v1.2.3` | npm | `1.2.3` |
+| `>=1.0.0<2.0.0` | | `>=1.0.0 <2.0.0` |
+
+The rest are syntax errors, not a guess at what was meant:
+
+| Written | Grammar | Why not | Write |
+|---|---|---|---|
+| `1.2.3 - 2.3.4` | npm | its spaces make it a range: `1.2.3-2.3.4` is one version | `>=1.2.3 <=2.3.4` |
+| `==1.2`, `!=1.2` | Python, Composer | 1.2.0 there, the 1.2 line in npm's terms | `==1.2.0` or `1.2.x`; `!=1.2.0` or `!=1.2.x` |
+| `~=1.4`, `~>1.4` | Python; RubyGems, Hex | `>=1.4 <2` there, the 1.4 line in npm's | `>=1.4 <2` or `~1.4` |
+| an empty range | npm, meaning any | an unset field would match everything | `*` |
+
+And one that is not an error but means something else elsewhere: Cargo reads a bare
+`1.2.3` as `^1.2.3`; here it is exactly `1.2.3`.
+
+### Where npm differs
+
+npm reads two things its own way. In its default mode it treats `>=0.0.0`, and the lower
+bound of `^0.0`, `~0.0.0`, `0.x` and the like, as `*`, which lets 0.0.0's pre-releases
+past it. And a set that is only `*` takes over the whole range, shutting out
+pre-releases the other sets name. nanosemver does neither. Everywhere else,
+`make npm-check` holds it to npm's own semver package: a million generated ranges,
+every range of up to two comparators over the operators and whole and partial versions,
+the unit tests' own cases, and the test corpus, against versions around their bounds.
+Ranges with commas, `==` or comparators run together go to npm respelled as its own
+(`>=1.2 <1.5`, `=1.2.3`, `>=1.0.0 <2.0.0`), and ranges with `!=`, which has no npm
+spelling, are left to the reference tests.
+
+## Building
+
+Add `nanosemver.c` to your build, as C; from C++, optionally include `nanosemver.hpp`,
+which has nothing to build. `nanosemver.c` calls nothing but `memcpy`. On cores without a
+fast divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linked in
+either: `NSV_SOFT_DIV` selects that, 1 by default on Cortex-M0/M0+/M1, AVR, MSP430 and
+RISC-V without M, 0 elsewhere; define it to override. Built with `-ffunction-sections`
+and linked with `--gc-sections`, a program pays only for the functions it calls: on a
+Cortex-M0+, range matching adds about 950 bytes to parsing and comparing, and prefix
+parsing shares the parser's code.
 
 ## Development
 
@@ -147,7 +330,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs and division by shifts |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
 | `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
@@ -155,25 +338,56 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 | `make bench BENCH_ARGS=--quick` | host timings against `BENCH_BASE`; `--filter cmp` picks workloads |
 | `make bench-cm` | emulated Cortex-M0+ and Cortex-M4 instruction counts and cycles against `BENCH_BASE` |
 | `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks |
-| `build.bat [fuzz \| clean]` | the unit tests, both configurations, and optionally the fuzz driver, with MSVC |
+| `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
+| `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
+| `make mutate MUTATE_ARGS="--jobs 8 --shard 0/4"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |
+| `build.bat [fuzz \| clean]` | the unit tests, both configurations, `nanosemver.hpp` on its own under each C++ standard MSVC has, and optionally the fuzz driver, with MSVC |
 
 The tests check `nanosemver.c` against a deliberately naive reference implementation in
 `tests/ref_semver.cc`, which is itself checked against the regular expression semver.org
-publishes. Every string the tests parse sits against a guard page, so reading one byte
-past the end faults even without a sanitizer. The fuzzers check the same properties on
-generated and mutated input: the result code, every field, the format round-trip, deep
-copy and relocation, and comparison in both directions against the reference.
-`tests/test_long.cc` runs those checks exhaustively on long sections: every byte value at
-every position, every length up to 40, and comparisons that differ at every position.
+publishes. It finds a prefix by trying every length, and matches a range by splitting it
+into strings, with `^` and `~` rewritten into npm's two bounds. Every string the tests
+parse sits against a guard page, so reading one byte past the end faults even without a
+sanitizer. The fuzzers check the same properties on generated and mutated input: the
+result code, every field, the format round-trip, deep copy and relocation, comparison in
+both directions, the prefix parse, and ranges around the version, all against the
+reference. `tests/test_long.cc` runs those checks exhaustively on long sections: every
+byte value at every position, every length up to 40, and comparisons that differ at
+every position. Exhaustively too: every string of up to six bytes of each kind for the
+prefix parse; every range of up to three comparators over whole versions, and of up to two
+over whole and partial versions and `!=`, for the matcher; and every byte at every
+position of a range. The matcher's hand-written cases are shared with the reference, which
+has to give the same answers, and `make npm-check` holds them to npm's.
+
+Some properties need no oracle at all, and `tests/test_range_props.cc` checks them on
+random ranges against versions at every boundary: every operator agrees with its
+definition in terms of the others, `||` is the union of its sets, spacing, order and
+repetition change nothing, a set of bounds admits an unbroken run of versions,
+`NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
+metadata on the version never matters.
+
+`tests/test_hpp.cc` holds `nsv::SemVer` to the C API under it: every parse, prefix parse,
+comparison, range match and format against the C function's own answer, every error
+leaving the version as it was, and copies that outlive their source string.
+
+`make mutate` measures all of that: it makes a thousand small changes to
+`nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a
+dropped statement, and fails unless the tests catch every one that changes behavior.
+The few that cannot, like `k < 3` for `k != 3` in a loop counting up from zero, are listed
+with their reasons in `tests/mutate-equivalent.txt`.
 
 ## Releases
 
 Push a tag like `v1.2.0` (or `v1.2.0-rc.1`, published as a pre-release). CI runs the
 whole matrix against it and, only if everything passes, `release.sh` stamps the tag
-into the first line of `nanosemver.h` and publishes it as a GitHub release, alongside
-`nanosemver.c` and a zip of the full source carrying the same stamped header. The
-checked-in header keeps its `@NSV_VERSION@` placeholder, so no commit ever bumps a
-version. `./release.sh v1.2.0` shows locally what a tag would ship.
+into `nanosemver.h` and `nanosemver.hpp` and publishes them as a GitHub release, alongside
+`nanosemver.c` and a zip of the full source carrying the same stamped headers. The stamp
+is the first line of each, and in `nanosemver.h`, `NSV_VERSION_MAJOR`,
+`NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and the string `NSV_VERSION` (`"1.2.0-rc.1"`),
+for code that reports or checks which nanosemver it has; a stamped `nanosemver.hpp`
+refuses to build against any other release's `nanosemver.h`. The checked-in headers keep
+their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever bumps a version.
+`./release.sh v1.2.0` shows locally what a tag would ship.
 
 ## License
 
