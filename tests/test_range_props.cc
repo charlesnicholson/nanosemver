@@ -1,6 +1,6 @@
 // Properties nsv_range_match must have whatever the reference says: its operators agree
-// with their definitions in terms of each other, alternatives are unions, spacing and
-// order do not matter, ranges of bounds are intervals, and the pre-release flag only
+// with their definitions in terms of each other, alternatives are unions, spacing, commas
+// and order do not matter, ranges of bounds are intervals, and the pre-release flag only
 // ever takes matches away. Ranges are drawn at random from operators and versions, whole
 // and partial, around the edges of every rule, and checked against every version in a
 // pool that straddles them.
@@ -38,7 +38,7 @@ char const *const k_partial[] = {
   "1.4294967295", "4294967294.4294967295",
 };
 
-char const *const k_ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "!=" };
+char const *const k_ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "!=", "==", "~=", "~>" };
 
 struct versions {
   std::vector<std::string> str;
@@ -106,21 +106,26 @@ range random_range(nsv_fuzz::rng &r) {
   return out;
 }
 
-// One way of writing a range out; spacing varies with style.
+// One way of writing a range out; spacing, commas and v prefixes vary with style.
 std::string render(range const &rg, unsigned style) {
-  static char const *const ands[] = { " ", "\t", "   ", " \t " };
+  // Between comparators; "" only before an operator.
+  static char const *const ands[] = { " ", "\t", "   ", " \t ", ",", ", ", "\t, ", "" };
   static char const *const ors[] = { "||", " || ", "\t||\t", "||  " };
   std::string s = (style & 1) ? " " : "";
   for (size_t i = 0; i < rg.size(); ++i) {
     s += i ? ors[(style + i) % 4] : "";
     for (size_t j = 0; j < rg[i].size(); ++j) {
-      s += j ? ands[(style + j) % 4] : "";
       std::string c = rg[i][j];
-      if (style & 4) {  // a space after the operator
-        size_t const k = c.find_first_not_of("<>=!^~");
-        if (k && (k != std::string::npos)) {
-          c.insert(k, " ");
-        }
+      size_t const k = c.find_first_not_of("<>=!^~");
+      if (j) {
+        char const *const a = ands[((style >> 5) + j) % 8];
+        s += (*a || k) ? a : " ";
+      }
+      if ((style & 16) && (k != std::string::npos) && (c[k] >= '0') && (c[k] <= '9')) {
+        c.insert(k, "v");
+      }
+      if ((style & 4) && k && (k != std::string::npos)) {  // a space after the operator
+        c.insert(k, " ");
       }
       s += c;
     }
@@ -149,7 +154,7 @@ std::string next_line(uint64_t major, uint64_t minor, uint64_t patch, size_t k) 
 TEST_CASE("range properties: the flag only takes matches away, and never from a release") {
   nsv_fuzz::rng r(101);
   for (int n = 0; n < 3000; ++n) {
-    std::string const s = render(random_range(r), r.below(16));
+    std::string const s = render(random_range(r), r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       nsv_semver_t const &v = pool().v[i];
       int const plain = match(s, v, 0), excl = match(s, v, NSV_RANGE_EXCLUDE_PRE);
@@ -175,7 +180,7 @@ TEST_CASE("range properties: build metadata on the version never matters") {
   }
   versions const built{ with };
   for (int n = 0; n < 2000; ++n) {
-    std::string const s = render(random_range(r), r.below(16));
+    std::string const s = render(random_range(r), r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {
         INFO("\"", s, "\" against ", pool().str[i]);
@@ -190,18 +195,18 @@ TEST_CASE("range properties: spacing, order and repetition do not matter") {
   for (int n = 0; n < 2000; ++n) {
     range rg = random_range(r);
     std::string const base = render(rg, 0);
-    same_everywhere(base, render(rg, 1 + r.below(15)));
+    same_everywhere(base, render(rg, 1 + r.below(255)));
     // Comparators within a set, and sets within the range, in another order.
     for (set &s : rg) {
       std::rotate(s.begin(), s.begin() + offset(r, s.size()), s.end());
     }
     std::rotate(rg.begin(), rg.begin() + offset(r, rg.size()), rg.end());
-    same_everywhere(base, render(rg, r.below(16)));
+    same_everywhere(base, render(rg, r.below(256)));
     // A comparator twice, a set twice.
     set &s0 = rg[r.below(static_cast<uint32_t>(rg.size()))];
     s0.push_back(s0[r.below(static_cast<uint32_t>(s0.size()))]);
     rg.push_back(rg[r.below(static_cast<uint32_t>(rg.size()))]);
-    same_everywhere(base, render(rg, r.below(16)));
+    same_everywhere(base, render(rg, r.below(256)));
   }
 }
 
@@ -209,7 +214,7 @@ TEST_CASE("range properties: || is the union of its sets") {
   nsv_fuzz::rng r(104);
   for (int n = 0; n < 2000; ++n) {
     range const rg = random_range(r);
-    std::string const whole = render(rg, r.below(16));
+    std::string const whole = render(rg, r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {
         int const w = match(whole, pool().v[i], f);
@@ -232,7 +237,7 @@ TEST_CASE("range properties: without pre-releases in the way, a set is the AND o
   nsv_fuzz::rng r(105);
   for (int n = 0; n < 2000; ++n) {
     set const s = random_range(r)[0];
-    std::string const whole = render(range{ s }, r.below(16));
+    std::string const whole = render(range{ s }, r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       int const w = match(whole, pool().v[i], 0);
       int all = 1, err = 0;
@@ -269,6 +274,11 @@ TEST_CASE("range properties: each operator is its definition") {
       int const lt = match("<" + v, x, 0), eq = match(v, x, 0), gt = match(">" + v, x, 0);
       REQUIRE(lt + eq + gt == 1);
       REQUIRE(match("!=" + v, x, 0) == 1 - eq);
+      for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {  // other grammars' = and ~
+        REQUIRE(match("==" + v, x, f) == match("=" + v, x, f));
+        REQUIRE(match("~=" + v, x, f) == match("~" + v, x, f));
+        REQUIRE(match("~>" + v, x, f) == match("~" + v, x, f));
+      }
       if (!pv.pre_len) {  // a release bound names no pre-release, either way
         REQUIRE(match("!=" + v, x, NSV_RANGE_EXCLUDE_PRE) ==
                 match("<" + v + " || >" + v, x, NSV_RANGE_EXCLUDE_PRE));
@@ -285,7 +295,12 @@ TEST_CASE("range properties: each operator is its definition") {
       int const lt = match("<" + p, x, 0), eq = match(p, x, 0), gt = match(">" + p, x, 0);
       REQUIRE(lt + eq + gt == 1);
       REQUIRE(match("=" + p, x, 0) == eq);
-      REQUIRE(match("!=" + p, x, 0) == 1 - eq);
+      // != takes a partial version only with a wildcard, and the others' operators none.
+      bool const wild = p.find_first_of("xX*") != std::string::npos;
+      REQUIRE(match("!=" + p, x, 0) == (wild ? 1 - eq : NSV_RET_ERR_SYNTAX));
+      for (char const *op : { "==", "~=", "~>" }) {
+        REQUIRE(match(op + p, x, 0) == NSV_RET_ERR_SYNTAX);
+      }
       REQUIRE(match("<=" + p, x, 0) == (lt | eq));
       REQUIRE(match(">=" + p, x, 0) == (gt | eq));
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {
@@ -374,7 +389,7 @@ TEST_CASE("range properties: a set of bounds is an interval of versions") {
 TEST_CASE("range properties: v as a view, a copy, or relocated") {
   nsv_fuzz::rng r(107);
   for (int n = 0; n < 500; ++n) {
-    std::string const s = render(random_range(r), r.below(16));
+    std::string const s = render(random_range(r), r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       nsv_test::blob const c = nsv_test::copy(pool().v[i]);
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {

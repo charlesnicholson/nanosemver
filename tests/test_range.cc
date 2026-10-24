@@ -44,8 +44,8 @@ TEST_CASE("nsv_range_match: comparison operators") {
     char const *op;
     int below, pre, at, above;
   } const ops[] = {
-    { "", 0, 0, 1, 0 },  { "=", 0, 0, 1, 0 },  { "<", 1, 1, 0, 0 },
-    { "<=", 1, 1, 1, 0 }, { ">", 0, 0, 0, 1 }, { ">=", 0, 0, 1, 1 },
+    { "", 0, 0, 1, 0 },   { "=", 0, 0, 1, 0 }, { "==", 0, 0, 1, 0 }, { "<", 1, 1, 0, 0 },
+    { "<=", 1, 1, 1, 0 }, { ">", 0, 0, 0, 1 }, { ">=", 0, 0, 1, 1 }, { "!=", 1, 1, 0, 1 },
   };
   for (auto const &o : ops) {
     std::string const r = std::string(o.op) + "1.2.3";
@@ -79,12 +79,27 @@ TEST_CASE("nsv_range_match: sets and alternatives") {
   }
 }
 
+TEST_CASE("nsv_range_match: other grammars' spellings") {
+  for (match_case const &c : range_cases::k_other) {
+    check(c);
+  }
+}
+
 TEST_CASE("nsv_range_match: spacing") {
   for (char const *r : { ">=1.0.0 <2.0.0", " >=1.0.0 <2.0.0", ">=1.0.0 <2.0.0 ",
                          ">=1.0.0   <2.0.0", ">=1.0.0\t<2.0.0", " \t>=1.0.0 \t <2.0.0\t ",
                          ">= 1.0.0 < 2.0.0", ">=\t1.0.0 <  2.0.0", ">=1.0.0 <2.0.0 || 9.9.9",
                          ">=1.0.0 <2.0.0||9.9.9", ">=1.0.0 <2.0.0 ||9.9.9",
-                         ">=1.0.0 <2.0.0||  9.9.9" }) {
+                         ">=1.0.0 <2.0.0||  9.9.9",
+                         // Commas, and no space at all before an operator.
+                         ">=1.0.0,<2.0.0", ">=1.0.0, <2.0.0", ">=1.0.0 ,<2.0.0",
+                         ">=1.0.0 , <2.0.0", ">=1.0.0\t,\t<2.0.0", ">= 1.0.0 ,\t< 2.0.0",
+                         ">=1.0.0<2.0.0", ">= 1.0.0<2.0.0", ">=1.0.0< 2.0.0",
+                         ">=1.0.0<2.0.0||9.9.9", ">=1.0.0,<2.0.0 || 9.9.9",
+                         ">=1.0.0<2.0.0 ||9.9.9", " >=1.0.0<2.0.0 ",
+                         // A v before the versions.
+                         ">=v1.0.0 <v2.0.0", ">= v1.0.0 <2.0.0", ">=v1.0.0<v2.0.0 v*",
+                         ">=v1.0.0,<v2.0.0 || v9.9.9" }) {
     INFO("\"", r, "\"");
     REQUIRE(match(r, "1.5.0") == 1);
     REQUIRE(match(r, "2.5.0") == 0);
@@ -105,28 +120,41 @@ TEST_CASE("nsv_range_match: syntax errors") {
            "1.2.x-rc", "*-0", "-1", "+", ".", "1.2.3 .x", "x.x.x.x", "*.*.*.*", "x.",
            ".x", "x-1", "1.x.x-rc", "1.2.x+b", "0.0.0.0", "00", "00.x", "0.00", "1. 2",
            "1 .2", "x .x", "1.2.3.4.5", "1.x.0", "*1", "1*", "1.*2",
-           // Operators npm does not have, or only in loose forms.
-           "==1.2.3", "!1.2.3", "! =1.2.3", "!==1.2.3", "=!1.2.3", "=>1.2.3", "=<1.2.3",
-           "<>1.2.3", ">>1.2.3", "<<1.2.3", "~>1.2.3", "~=1.2.3", "^=1.2.3", "^^1.2.3",
-           "~^1.2.3", "> =1.2.3", "< =1.2.3", "v1.2.3", "=v1.2.3", ">=v1.2.3", "!",
-           ">=<1.0.0", "<=>1.0.0", "^~1.2.3", "!=!=1.2.3", "!= =1.2.3", "~~1", "^^1",
-           ">^1.2.3", "<~1.2.3", "=^1.2.3", "!^1.2.3", "!~1", "=<1", ">==1.2.3",
+           // Operators no grammar has, or split by a space.
+           "!1.2.3", "! =1.2.3", "!==1.2.3", "=!1.2.3", "=>1.2.3", "=<1.2.3", "<>1.2.3",
+           ">>1.2.3", "<<1.2.3", "^=1.2.3", "^^1.2.3", "~^1.2.3", "> =1.2.3", "< =1.2.3",
+           "!", ">=<1.0.0", "<=>1.0.0", "^~1.2.3", "!=!=1.2.3", "!= =1.2.3", "~~1", "^^1",
+           ">^1.2.3", "<~1.2.3", "=^1.2.3", "!^1.2.3", "!~1", "=<1", ">==1.2.3", "===1.2.3",
+           "= =1.2.3", "~ >1.2.3", "~ =1.2.3", "~=>1.2.3", "~>=1.2.3", "~==1.2.3", "~>>1.2.3",
+           "^>1.2.3", "=~1.2.3", "==~1.2.3", "~=~1.2.3",
+           // Other grammars' operators on a partial version, which they read otherwise.
+           "==1.2", "==1", "==1.x", "==*", "== 1.2", "~=1.2", "~=1", "~=1.x", "~>1.2",
+           "~>1", "~>1.x", "~>*", "~> 1.2", "==v1.2", "~>v1",
+           // != on a partial version without a wildcard, which elsewhere means not X.Y.0.
+           "!=1", "!=1.2", "!= 1.2", "!=0", "!=0.0", "!=v1.2", "!=4294967296",
+           // A v anywhere but just before a version.
+           "V1.2.3", "vv1.2.3", "v 1.2.3", "vvx", "v.1", "v", ">=v", ">= v", "v-1", "xv",
+           "1.2.3v", "v1.2.3v", "=vv1.2.3", ">v=1.2.3", "v>=1.2.3", "1.2.3-rc v",
            // An operator with no version.
            "<", "<=", ">", ">=", "=", "^", "~", "!=", ">=1.0.0 <", "1.0.0 || >=",
            ">= || 1.0.0", "1.0.0 || ^", "~ || ~", "!= ", "^\t",
            // Bars.
            "1.0.0 || |2.0.0", "1.0.0| |2.0.0", "1.0.0 |||| 2.0.0", "|1.0.0", "1.0.0|",
            "| |", "|||", "1.0.0 ||\t|| 2.0.0",
-           // Separators npm does not have.
-           ">=1.0.0, <2.0.0", ">=1.0.0,<2.0.0", ">=1.0.0 && <2.0.0", "1.0.0 | 2.0.0",
-           "1.0.0|2.0.0", "1.0.0 ||| 2.0.0", "1.0.0 or 2.0.0", "1.0.0\n", "1.0.0\r",
-           "1.0.0\v2.0.0",
-           // Comparators must be separated.
-           ">=1.0.0<2.0.0", "1.0.0=2.0.0", "1.0.0^2.0.0", "1.0.0~2.0.0",
+           // Separators no grammar has.
+           ">=1.0.0 && <2.0.0", "1.0.0 | 2.0.0", "1.0.0|2.0.0", "1.0.0 ||| 2.0.0",
+           "1.0.0 or 2.0.0", "1.0.0\n", "1.0.0\r", "1.0.0\v2.0.0", "1.0.0;2.0.0",
+           // A comma anywhere but between two comparators.
+           ",", " , ", ",1.0.0", ", 1.0.0", "1.0.0,", "1.0.0 ,", "1.0.0,,2.0.0",
+           "1.0.0, ,2.0.0", ">=,1.0.0", ">= ,1.0.0", "1.0.0, || 2.0.0", "1.0.0,|| 2.0.0",
+           "1.0.0 ||, 2.0.0", "1.0.0 || ,2.0.0", "1.0.0,||2.0.0", "1.0.0||,2.0.0", ",||",
+           // A version runs into whatever follows it but an operator.
+           "1.0.02.0.0", "1.0.0x", "1.0.0.x", "*1", "x1", "1.xx", "1.2.3a", "1.2.3_<2",
+           "1.0.0>", "1.0.0<=", "1.0.0!", "1.0.0!1.0.0", "1.0.0-<2", "1.0.0+<2",
            // Hyphen ranges.
            "1.0.0 - 2.0.0", "1.0.0 -2.0.0", "1.2 - 2.3", "1 - 2",
            // Trailing junk.
-           ">=1.0.0 y", ">=1.0.0 v", "1.0.0 ,", "1.0.0 |" }) {
+           ">=1.0.0 y", ">=1.0.0 v", "1.0.0 |" }) {
     INFO("\"", r, "\"");
     REQUIRE(match(r, "1.0.0") == NSV_RET_ERR_SYNTAX);
     REQUIRE(match(r, "1.0.0", NSV_RANGE_EXCLUDE_PRE) == NSV_RET_ERR_SYNTAX);
@@ -163,7 +191,13 @@ TEST_CASE("nsv_range_match: versions beyond the limits") {
   REQUIRE(match(huge + " || ^4294967296", "1.0.0") == NSV_RET_ERR_TOO_LONG);
   REQUIRE(match(">4294967296 <4294967296.0.0", "1.0.0") == NSV_RET_ERR_OVERFLOW);
   REQUIRE(match("1.x 4294967296.x 1.x.3", "1.0.0") == NSV_RET_ERR_SYNTAX);
-  REQUIRE(match("!=4294967296", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("!=4294967296.x", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("!=4294967296", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("==4294967296.0.0", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("~>4294967296.0", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("~=" + huge, "1.0.0") == NSV_RET_ERR_TOO_LONG);
+  REQUIRE(match(">=1.0.0," + huge, "1.0.0") == NSV_RET_ERR_TOO_LONG);
+  REQUIRE(match(">=1.0.0<4294967296.0.0", "1.0.0") == NSV_RET_ERR_OVERFLOW);
   REQUIRE(match("~4294967295.4294967296", "1.0.0") == NSV_RET_ERR_OVERFLOW);
   REQUIRE(match("^" + std::string(100000, '1') + ".x", "1.0.0") == NSV_RET_ERR_OVERFLOW);
   REQUIRE(match(huge + "_", "1.0.0") == NSV_RET_ERR_SYNTAX);
@@ -218,6 +252,10 @@ TEST_CASE("nsv_range_match: partial version numbers around UINT32_MAX, in each p
           for (char const *op : { "", "=", ">=", "<=", ">", "<", "^", "~", "!=" }) {
             std::string const r = std::string(op) + line + tail;
             INFO(r);
+            if ((std::string(op) == "!=") && !*tail) {
+              REQUIRE(match(r, "1.0.0") == NSV_RET_ERR_SYNTAX);
+              continue;
+            }
             if (!fits) {
               REQUIRE(match(r, "1.0.0") == NSV_RET_ERR_OVERFLOW);
               continue;
@@ -252,12 +290,17 @@ TEST_CASE("nsv_range_match: every byte between comparators and before a version"
     char const ch = static_cast<char>(c);
     bool const space = (ch == ' ') || (ch == '\t');
     INFO("byte ", c);
-    // Between two comparators: only spaces and tabs.
-    REQUIRE((match(std::string(">=1.0.0") + ch + "<2.0.0", "1.5.0") >= 0) == space);
-    // Before a version: an operator, a space, a tab or the version's own first digit.
+    // Between two comparators: nothing, or a space, a tab or a comma.
+    REQUIRE((match(std::string(">=1.0.0") + ch + "<2.0.0", "1.5.0") >= 0) ==
+            (space || (ch == ',')));
+    // Before a version: an operator, a space, a tab, a v or the version's own first digit.
     bool const lead = space || (ch == '<') || (ch == '>') || (ch == '=') || (ch == '^') ||
-                      (ch == '~') || ((ch >= '1') && (ch <= '9'));
+                      (ch == '~') || (ch == 'v') || ((ch >= '1') && (ch <= '9'));
     REQUIRE((match(std::string(1, ch) + "1.2.3", "1.2.3") >= 0) == lead);
+    // Between a version and the next operator: nothing, a space, a tab or a comma, or
+    // a digit that lengthens the version.
+    REQUIRE((match(std::string("1.2.3") + ch + ">=1.0.0", "1.2.3") >= 0) ==
+            (space || (ch == ',') || ((ch >= '0') && (ch <= '9'))));
     // After a version: the end, a space, a tab, or a '|' that starts "||".
     REQUIRE((match(std::string("1.2.3") + ch + "|1.0.0", "1.0.0") >= 0) == (ch == '|'));
   }
@@ -268,7 +311,8 @@ namespace {
 // Every range of up to max_k comparators drawn from ops x vers, with AND or OR between
 // each two, checked against every test version in both modes. The answer is built from
 // the range's own structure, OR over sets of AND over comparators, from what each
-// comparator alone answers according to the reference.
+// comparator alone answers according to the reference; a comparator the reference
+// rejects makes any range with it a syntax error.
 void every_range(std::vector<char const *> const &ops, std::vector<char const *> const &vers,
                  size_t max_k) {
   static char const *const tests[] = {
@@ -289,13 +333,16 @@ void every_range(std::vector<char const *> const &ops, std::vector<char const *>
   // sat[m][c][t]: comparator c alone admits test t, in mode m (1 excluding pre-releases).
   // names[c][t]: c names a pre-release on t's MAJOR.MINOR.PATCH.
   std::vector<std::vector<bool>> sat[2], names(nc, std::vector<bool>(nt));
+  std::vector<bool> valid(nc);
   for (int m = 0; m < 2; ++m) {
     sat[m].assign(nc, std::vector<bool>(nt));
     for (size_t c = 0; c < nc; ++c) {
       std::string const term = std::string(ops[c / nv]) + vers[c % nv];
       for (size_t t = 0; t < nt; ++t) {
         bool pass = false, named = false;
-        REQUIRE(ref::term_match(term, trv[t], m == 1, &pass, &named) == ref::status::ok);
+        ref::status const st = ref::term_match(term, trv[t], m == 1, &pass, &named);
+        REQUIRE(((st == ref::status::ok) || (st == ref::status::syntax)));
+        valid[c] = (st == ref::status::ok);
         sat[m][c][t] = pass;
         names[c][t] = named;
       }
@@ -303,7 +350,8 @@ void every_range(std::vector<char const *> const &ops, std::vector<char const *>
   }
 
   static nsv_test::guarded g;
-  static char const *const ands[] = { " ", "\t", "  ", " \t " };
+  // Between two comparators of a set; "" only before an operator.
+  static char const *const ands[] = { " ", "\t", "  ", " \t ", ",", ", ", " ,\t", "" };
   static char const *const ors[] = { "||", " || ", "\t||", "||  " };
   for (size_t k = 1; k <= max_k; ++k) {
     size_t combos = 1;
@@ -319,13 +367,18 @@ void every_range(std::vector<char const *> const &ops, std::vector<char const *>
         // Spacing varies with the indices, so every kind turns up everywhere.
         size_t const vary = combo + bounds;
         std::string r = (vary % 5 == 0) ? " " : "";
+        bool ok = true;
         for (size_t i = 0; i < k; ++i) {
+          char const *const op = ops[cs[i] / nv], *const ver = vers[cs[i] % nv];
           if (i) {
-            r += ((bounds >> (i - 1)) & 1u) ? ors[(vary + i) % 4] : ands[(vary + i) % 4];
+            char const *const a = ands[(vary + i) % 8];
+            r += ((bounds >> (i - 1)) & 1u) ? ors[(vary + i) % 4] : ((*a || *op) ? a : " ");
           }
-          r += ops[cs[i] / nv];
+          r += op;
           r += ((vary + i) % 3 == 0) ? " " : "";
-          r += vers[cs[i] % nv];
+          r += (((vary + i) % 5 == 2) && (*ver >= '0') && (*ver <= '9')) ? "v" : "";
+          r += ver;
+          ok = ok && valid[cs[i]];
         }
         r += (vary % 7 == 0) ? "\t" : "";
         char const *const pr = g.place(r);
@@ -344,9 +397,10 @@ void every_range(std::vector<char const *> const &ops, std::vector<char const *>
             }
             unsigned const flags = m ? unsigned(NSV_RANGE_EXCLUDE_PRE) : 0u;
             int const got = nsv_range_match(pr, r.size(), &tv[t], flags);
-            if (got != int(any)) {
+            int const want = ok ? int(any) : int(NSV_RET_ERR_SYNTAX);
+            if (got != want) {
               INFO("\"", r, "\" against ", tstr[t], m ? ", excluding pre-releases" : "");
-              REQUIRE(got == int(any));
+              REQUIRE(got == want);
             }
           }
         }
@@ -363,7 +417,7 @@ TEST_CASE("nsv_range_match: every range of up to three comparators") {
 }
 
 TEST_CASE("nsv_range_match: every range of up to two comparators, partial versions too") {
-  every_range({ "", "=", "<", "<=", ">", ">=", "^", "~", "!=" },
+  every_range({ "", "=", "<", "<=", ">", ">=", "^", "~", "!=", "==", "~=", "~>" },
               { "0.0.3", "1.2.3", "1.2.3-rc.1", "1.2", "1", "1.x", "*", "0.2", "0", "0.0" },
               2);
 }
@@ -374,6 +428,7 @@ TEST_CASE("nsv_range_match: every byte at every position, and every truncation")
     "^0.2.3 || ~1.2.3\t=2.0.0-0+b",
     " 1.2.3 ||>1.2.3 <=1.9.0-x.7 ",
     "<0.0.3||^0.0.3-a",
+    ">=v1.2.3,~>1.2.4<2||!=1.x ==0.2.5",
   };
   std::string const vs[] = { "1.2.3", "1.2.3-rc.2", "0.2.5", "1.9.0-x.7", "0.0.3-b" };
   static nsv_test::guarded g;
@@ -432,13 +487,15 @@ TEST_CASE("nsv_range_match: v as a view, a copy and a literal") {
 TEST_CASE("nsv_range_match: a zero-initialized version is 0.0.0") {
   nsv_semver_t const v{};
   for (char const *r : { "0.0.0", "*", ">=0", "0", "0.x", "^0", "~0.0", "<0.0.1", "<=0.0.0",
-                         ">=0.0.0-0 <0.0.1-0", "!=1", "0.0.0 || 1.0.0" }) {
+                         ">=0.0.0-0 <0.0.1-0", "!=1.x", "0.0.0 || 1.0.0", "==0.0.0",
+                         "~>0.0.0", ">=0.0.0,<0.0.1", "v0.0.0" }) {
     INFO(r);
     std::string const rs = r;
     REQUIRE(nsv_range_match(rs.data(), rs.size(), &v, 0) == 1);
     REQUIRE(nsv_range_match(rs.data(), rs.size(), &v, NSV_RANGE_EXCLUDE_PRE) == 1);
   }
-  for (char const *r : { "<0.0.0", ">0.0.0", "!=0.0.0", "!=0", "<0", ">0", "1", "^0.0.1" }) {
+  for (char const *r : { "<0.0.0", ">0.0.0", "!=0.0.0", "!=0.x", "<0", ">0", "1", "^0.0.1",
+                         "==0.0.1", "~=0.1.0", ">0.0.0<1.0.0" }) {
     INFO(r);
     std::string const rs = r;
     REQUIRE(nsv_range_match(rs.data(), rs.size(), &v, 0) == 0);

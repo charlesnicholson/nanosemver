@@ -96,14 +96,19 @@ enum {
 
 /* Whether v satisfies the range in s[0, len), e.g. ">=1.2 <1.4 || ^2.1.0". No standard
    defines ranges; this grammar is npm's (https://github.com/npm/node-semver#range-grammar)
-   without hyphen ranges, plus !=, and npm reads every range of it the same way:
+   without hyphen ranges, plus != and the few spellings from other grammars that mean the
+   same in all of them, and npm reads every range of it, spelled as npm's, the same way:
      range       comparator sets separated by "||": v satisfies any one of them
-     set         comparators separated by spaces or tabs: v satisfies all of them
-     comparator  an operator, optional spaces, and a semver 2.0.0 version V
+     set         comparators separated by spaces, tabs or a comma, or by nothing before
+                 an operator (>=1.0.0<2.0.0): v satisfies all of them
+     comparator  an operator, optional spaces, and a version: a semver 2.0.0 version V
+                 or a partial version P below, either of which may start with a v
+                 (v1.2.3, as npm has it)
        <V <=V >V >=V   by nsv_cmp precedence
-       V =V            equal precedence, so build metadata never matters
-       !=V             not equal; not npm's, but Neargye's, PEP 440's and Composer's
-       ~V              >=V, with the same MAJOR.MINOR: ~1.2.3 is >=1.2.3 <1.3.0-0
+       V =V ==V        equal precedence, so build metadata never matters
+       !=V             not equal; != and == are PEP 440's and Composer's
+       ~V ~=V ~>V      >=V, with the same MAJOR.MINOR: ~1.2.3 is >=1.2.3 <1.3.0-0; ~= is
+                       PEP 440's, ~> RubyGems' and Hex's
        ^V              >=V, with the same leftmost nonzero of MAJOR.MINOR.PATCH:
                        ^1.2.3 is >=1.2.3 <2.0.0-0, ^0.2.3 is >=0.2.3 <0.3.0-0, and
                        ^0.0.3 is >=0.0.3 <0.0.4-0
@@ -111,10 +116,12 @@ enum {
      pre-release or build, which stands for its whole line, pre-releases and all:
        P =P            1.2 and 1.2.x are >=1.2.0-0 <1.3.0-0, and * is everything
        <P <=P >P >=P   <1.2 is <1.2.0-0, <=1.2 is <1.3.0-0, >1.2 is >=1.3.0-0
-       !=P             off the line: !=1.4 is <1.4.0-0 or >=1.5.0-0
+       !=P             off the line, with a wildcard: !=1.4.x is <1.4.0-0 or >=1.5.0-0
        ~P ^P           ~1 and ^1.2 are >=1.0.0-0 <2.0.0-0 and >=1.2.0-0 <2.0.0-0
-   No hyphen ranges, leading 'v', or other grammars' operators (==, ~>, ~=); an empty
-   range is a syntax error.
+   ==, ~= and ~> take no partial version, and != none without a wildcard, since their
+   grammars read ==1.2 and !=1.2 as 1.2.0, and ~=1.2 and ~>1.2 as >=1.2 <2. Spaces and
+   commas only separate, so there are no hyphen ranges, whose spaces are all that tells
+   1.2.3 - 2.3.4 from the version 1.2.3-2.3.4; and an empty range is a syntax error.
    By default a pre-release is just a version ranking below its release, as with npm's
    includePrerelease, so >=1.0.0 <2.0.0 admits 2.0.0-rc.1: write <2.0.0-0 to stop below
    every 2.0.0 pre-release, as ^ and ~ do. NSV_RANGE_EXCLUDE_PRE is npm's default, under

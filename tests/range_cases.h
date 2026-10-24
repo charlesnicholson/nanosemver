@@ -1,6 +1,7 @@
 // Range test cases with their answers, shared by the tests of nsv_range_match and of the
 // reference implementation, so both are held to the same table. The rows npm can read
-// (all but !=) are node-semver 7.8.5's own answers, but for k_npm_differs.
+// (all but !=, and k_other's once spelled as npm's) are node-semver 7.8.5's own answers,
+// but for k_npm_differs.
 #pragma once
 
 namespace range_cases {
@@ -245,7 +246,8 @@ inline constexpr match_case k_partial_max[] = {
 };
 
 // !=, which npm has not: off a whole version, or a partial version's whole line,
-// pre-releases included, and never letting a pre-release in.
+// pre-releases included, and never letting a pre-release in. A partial version needs a
+// wildcard, since elsewhere !=1.4 means not 1.4.0.
 inline constexpr match_case k_not[] = {
   { "!=1.2.3", "1.2.3", 0, 0 },
   { "!=1.2.3", "1.2.3+b", 0, 0 },
@@ -262,16 +264,76 @@ inline constexpr match_case k_not[] = {
   { ">=1.2.3-rc.0 !=1.2.3-rc.1", "1.2.3-rc.2", 1, 1 },
   { ">=1.2.3-rc.0 !=1.2.3-rc.1", "1.2.3-rc.1", 0, 0 },
   // A partial version: off the whole line, its pre-releases too.
-  { "!=1.4", "1.4.0", 0, 0 },
-  { "!=1.4", "1.4.99", 0, 0 },
-  { "!=1.4", "1.4.0-0", 0, 0 },
-  { "!=1.4", "1.5.0", 1, 1 },
-  { "!=1.4", "1.3.9", 1, 1 },
-  { "!=1", "1.9.9", 0, 0 },
-  { "!=1.x", "2.0.0", 1, 1 },
+  { "!=1.4.x", "1.4.0", 0, 0 },
+  { "!=1.4.x", "1.4.99", 0, 0 },
+  { "!=1.4.x", "1.4.0-0", 0, 0 },
+  { "!=1.4.x", "1.5.0", 1, 1 },
+  { "!=1.4.*", "1.3.9", 1, 1 },
+  { "!=1.x", "1.9.9", 0, 0 },
+  { "!=1.X.x", "2.0.0", 1, 1 },
   { "!=*", "1.0.0", 0, 0 },
-  { ">=1 !=1.4 <2", "1.4.5", 0, 0 },
-  { ">=1 !=1.4 <2", "1.5.0", 1, 1 },
+  { ">=1 !=1.4.x <2", "1.4.5", 0, 0 },
+  { ">=1 !=1.4.x <2", "1.5.0", 1, 1 },
+};
+
+// Other grammars' spellings: Python's and Composer's ==, PEP 440's ~=, RubyGems' and
+// Hex's ~>, npm's v1.2.3, commas between comparators, and comparators with no space
+// between them. Each is the npm range it spells, so these are npm's answers to that.
+inline constexpr match_case k_other[] = {
+  // == is =, on whole versions.
+  { "==1.2.3", "1.2.3", 1, 1 },
+  { "==1.2.3", "1.2.3+b", 1, 1 },
+  { "==1.2.3", "1.2.4", 0, 0 },
+  { "==1.2.3-rc.1", "1.2.3-rc.1", 1, 1 },
+  { "== 1.2.3", "1.2.3", 1, 1 },
+  // ~= and ~> are ~, on whole versions.
+  { "~=1.4.5", "1.4.4", 0, 0 },
+  { "~=1.4.5", "1.4.9", 1, 1 },
+  { "~=1.4.5", "1.4.9-rc", 1, 0 },
+  { "~=1.4.5", "1.5.0-0", 0, 0 },
+  { "~>1.4.5", "1.4.5", 1, 1 },
+  { "~>1.4.5", "1.5.0", 0, 0 },
+  { "~> 1.4.5", "1.4.9", 1, 1 },
+  { "~>0.2.3", "0.2.9", 1, 1 },
+  { "~>0.2.3", "0.3.0", 0, 0 },
+  { "~>1.4.5-rc.1", "1.4.5-rc.2", 1, 1 },
+  // A v before a version, whole or partial.
+  { "v1.2.3", "1.2.3", 1, 1 },
+  { "=v1.2.3", "1.2.3", 1, 1 },
+  { "==v1.2.3", "1.2.4", 0, 0 },
+  { ">=v1.2", "1.2.0", 1, 1 },
+  { "v1.x", "1.9.0", 1, 1 },
+  { "vx", "2.0.0", 1, 1 },
+  { "<v*", "2.0.0", 0, 0 },
+  { "^v1.2.3", "1.9.0", 1, 1 },
+  { "~>v1.2.3", "1.3.0", 0, 0 },
+  { ">= v1.0.0 <v2.0.0", "1.5.0", 1, 1 },
+  { "v1.2.3 || v2.0.0", "2.0.0", 1, 1 },
+  { "!=v1.2.x", "1.2.5", 0, 0 },
+  // Commas between comparators, as spaces are.
+  { ">=1.2, <1.5", "1.4.9", 1, 1 },
+  { ">=1.2, <1.5", "1.5.0", 0, 0 },
+  { ">=1.2,<1.5", "1.2.0", 1, 1 },
+  { ">=1.2 , <1.5", "1.1.0", 0, 0 },
+  { ">=1.2\t,\t<1.5", "1.3.0", 1, 1 },
+  { ">=1.2, <1.5", "1.2.0-rc", 1, 0 },
+  { ">=1.2, <1.5 || 2.x", "2.1.0", 1, 1 },
+  { ">=1.0.0, !=1.3.0, <2.0.0", "1.3.0", 0, 0 },
+  { ">=1.0.0, !=1.3.0, <2.0.0", "1.3.1", 1, 1 },
+  // Comparators with no space between them: a version ends where its characters do.
+  { ">=1.0.0<2.0.0", "1.5.0", 1, 1 },
+  { ">=1.0.0<2.0.0", "2.0.0", 0, 0 },
+  { ">=1.0.0-rc<2.0.0", "1.0.0-rc.1", 1, 1 },
+  { ">=1.0.0+b<2.0.0", "1.0.0", 1, 1 },
+  { "1.2.3=1.2.3", "1.2.3", 1, 1 },
+  { ">1.2<1.4", "1.3.5", 1, 1 },
+  { ">1.2<1.4", "1.4.0-0", 0, 0 },
+  { "*<2", "1.0.0", 1, 1 },
+  { "1.x!=1.2.x", "1.2.5", 0, 0 },
+  { "1.x!=1.2.x", "1.3.0", 1, 1 },
+  { "^1.2.3~>1.2.4", "1.2.5", 1, 1 },
+  { ">=1.0.0<2.0.0||3.0.0", "3.0.0", 1, 1 },
+  { ">=1.0.0< 2.0.0", "1.0.0", 1, 1 },
 };
 
 // Every table above, for whatever checks them all.
@@ -289,6 +351,7 @@ inline constexpr table k_all[] = {
   { k_partial, sizeof(k_partial) / sizeof(k_partial[0]) },
   { k_partial_max, sizeof(k_partial_max) / sizeof(k_partial_max[0]) },
   { k_not, sizeof(k_not) / sizeof(k_not[0]) },
+  { k_other, sizeof(k_other) / sizeof(k_other[0]) },
 };
 
 }  // namespace range_cases

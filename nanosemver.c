@@ -281,8 +281,9 @@ int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
    of MAJOR.MINOR.PATCH v must share with the bound, from the left, as bits 3-5, where 4
    means ^'s leftmost nonzero (= and != say 3, which an equal version shares anyway);
    NSV_HOW_NOT for != and NSV_HOW_PARTIAL for a partial version's bound, neither of which
-   ever lets a pre-release in; NSV_HOW_EXCL under NSV_RANGE_EXCLUDE_PRE; and NSV_HOW_OVF
-   from a partial version too big. */
+   ever lets a pre-release in; NSV_HOW_EXCL under NSV_RANGE_EXCLUDE_PRE; NSV_HOW_OVF from a
+   partial version too big; and NSV_HOW_WHOLE for ==, ~= and ~>, which take no partial
+   version. */
 #define NSV_BIT_LT (1u << NSV_CMP_LT)
 #define NSV_BIT_EQ (1u << NSV_CMP_EQ)
 #define NSV_BIT_GT (1u << NSV_CMP_GT)
@@ -291,6 +292,7 @@ int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
 #define NSV_HOW_PARTIAL (1u << 7)
 #define NSV_HOW_EXCL (1u << 8)
 #define NSV_HOW_OVF (1u << 9)
+#define NSV_HOW_WHOLE (1u << 10)
 
 static char const *nsv_skip_ws(char const *p, char const *e) {
   while ((p != e) && ((*p == ' ') || (*p == '\t'))) {
@@ -337,6 +339,12 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
     }
     ++p;
   }
+  /* In their own grammars ==1.2 is 1.2.0, ~=1.2 and ~>1.2 are >=1.2 <2 and !=1.2 is not
+     1.2.0, none of them the 1.2 line: so ==, ~= and ~> take only whole versions, and !=
+     a partial one only with a wildcard. */
+  if ((h & NSV_HOW_WHOLE) || ((h & NSV_HOW_NOT) && (k == i))) {
+    return NULL;
+  }
 
   if (acc == (NSV_BIT_LT | NSV_BIT_EQ)) { /* <=1.2 is not >1.2 */
     h ^= NSV_BIT_LT | NSV_BIT_EQ | NSV_BIT_GT | NSV_HOW_NOT;
@@ -382,7 +390,7 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
   /* Every set is parsed, even once the answer is known, so a malformed range is always
      an error. */
   for (;;) {
-    unsigned state = fresh;
+    unsigned state = fresh, glued = 0;
     p = nsv_skip_ws(p, e);
     do {
       nsv_semver_t c;
@@ -404,21 +412,28 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
           how |= NSV_BIT_EQ;
         }
       } else if ((op == '^') || (op == '~')) {
-        ++p;
         how ^= NSV_BIT_GT | NSV_HOW_KEEP(3 ^ ((op == '~') ? 2u : 4u));
-      } else if ((op == '=') || (op == '!')) {
-        ++p;
-        if (op == '!') { /* != is not npm's, but Neargye's, PEP 440's and Composer's */
-          if ((p == e) || (*p != '=')) {
-            return NSV_RET_ERR_SYNTAX;
-          }
-          ++p;
-          how |= NSV_HOW_NOT;
+        if ((++p != e) && (op == '~') && ((*p == '=') || (*p == '>'))) {
+          ++p; /* PEP 440's ~= and RubyGems' ~>, which agree with ~ on whole versions */
+          how |= NSV_HOW_WHOLE;
         }
+      } else if ((op == '=') || (op == '!')) {
+        /* != and == are not npm's, but PEP 440's and Composer's */
+        if ((++p != e) && (*p == '=')) {
+          ++p;
+          how |= (op == '!') ? NSV_HOW_NOT : NSV_HOW_WHOLE;
+        } else if (op == '!') {
+          return NSV_RET_ERR_SYNTAX;
+        }
+      } else if (glued) { /* only an operator may follow a version with nothing between */
+        return NSV_RET_ERR_SYNTAX;
       }
 
-      /* A version, or failing that a partial one. */
+      /* A version, npm's v1.2.3 among them, or failing that a partial one. */
       p = nsv_skip_ws(p, e);
+      if ((p != e) && (*p == 'v')) {
+        ++p;
+      }
       rc = nsv_parse_prefix(&c, p, (size_t)(e - p), &n);
       if (rc == NSV_RET_ERR_SYNTAX) {
         unsigned h = how; /* not how's own address, which would keep it out of a register */
@@ -432,10 +447,15 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
       }
       p += n;
       q = nsv_skip_ws(p, e);
-      /* A version ends at a space, a tab, a '|' or the end, never at another operator. */
-      if ((q == p) && (p != e) && (*p != '|')) {
-        return NSV_RET_ERR_SYNTAX;
+      /* A version ends at a space, a tab, a comma, a '|', the next comparator's operator
+         or the end, and a comma stands between two comparators. */
+      if ((q != e) && (*q == ',')) {
+        q = nsv_skip_ws(q + 1, e);
+        if ((q == e) || (*q == '|')) {
+          return NSV_RET_ERR_SYNTAX;
+        }
       }
+      glued = (q == p);
       p = q;
       if (rc) {
         if (ret >= 0) {

@@ -247,15 +247,17 @@ parts range_parts(rng &r) {
   return p;
 }
 
-// A range around v: mostly npm's grammar, sometimes with operators, separators and
-// spacing from other grammars or from nowhere.
+// A range around v: mostly the grammar, other grammars' operators and commas included,
+// sometimes with operators, separators and spacing from nowhere.
 std::string gen_range(rng &r, parts const &v) {
-  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "!=" };
-  static char const *const bad_ops[] = { "==", "=>", "~>", "~=", "^=", "<<", "v", "!", "! =",
-                                         "-", "|" };
+  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "!=", "==",
+                                     "~=", "~>" };
+  static char const *const bad_ops[] = { "=>", "^=", "<<", "!", "! =", "===", "~ >", "V",
+                                         "vv", "-", "|", "," };
   static char const *const gaps[] = { " ", "  ", "\t" };
-  static char const *const ands[] = { " ", "  ", "\t", " \t " };
-  static char const *const bad_ands[] = { "", ",", ", ", "\v", "&&", " - " };
+  // "" runs comparators together, which only an operator after it can follow.
+  static char const *const ands[] = { " ", "  ", "\t", " \t ", ",", ", ", " , ", "" };
+  static char const *const bad_ands[] = { ",,", ", ,", "\v", "&&", " - ", ";" };
   static char const *const ors[] = { "||", " || ", "  ||  ", " ||", "|| " };
   static char const *const bad_ors[] = { "|", " | ", "|||", " or ", "|| ||" };
   auto mostly = [&r](auto const &good, auto const &bad) {
@@ -273,6 +275,7 @@ std::string gen_range(rng &r, parts const &v) {
       }
       s += mostly(ops, bad_ops);
       s += r.chance(10) ? any(r, gaps) : "";
+      s += r.chance(5) ? "v" : "";
       s += near_version(r, v);
     }
   }

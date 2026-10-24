@@ -201,7 +201,11 @@ std::vector<std::string_view> split_spaces(std::string_view s) {
 }
 
 // Longest first, so "<=" is not read as "<" then "=".
-std::string_view const k_ops[] = { "<=", ">=", "!=", "<", ">", "=", "^", "~" };
+std::string_view const k_ops[] = { "<=", ">=", "!=", "==", "~=", "~>", "<", ">", "=", "^", "~" };
+
+bool is_op_char(char c) {
+  return std::string_view("<>=!^~").find(c) != std::string_view::npos;
+}
 
 std::string_view op_prefix(std::string_view tok) {
   for (std::string_view const op : k_ops) {
@@ -223,8 +227,9 @@ struct term {
 
 bool is_wildcard(std::string_view s) { return (s == "x") || (s == "X") || (s == "*"); }
 
-// npm's partial versions: one to three dot-separated parts, numbers then wildcards.
-status parse_partial(std::string_view s, term *t) {
+// npm's partial versions: one to three dot-separated parts, numbers then wildcards, and
+// with need_wildcard at least one wildcard.
+status parse_partial(std::string_view s, term *t, bool need_wildcard) {
   std::vector<std::string_view> const parts = split(s, '.');
   if (parts.size() > 3) {
     return status::syntax;
@@ -238,6 +243,9 @@ status parse_partial(std::string_view s, term *t) {
       return status::syntax;
     }
     ++t->k;
+  }
+  if (need_wildcard && (t->k == parts.size())) {
+    return status::syntax;
   }
   for (size_t i = 0; i < t->k; ++i) {
     if (!fits_u32(parts[i])) {
@@ -353,12 +361,35 @@ void eval(term const &t, version const &v, bool exclude_pre, bool *ok, bool *nam
                       (t.v.patch == v.patch));
 }
 
-// One comparator's token or tokens: an operator, then a version or a partial one.
+// One comparator's token or tokens: an operator, then a version or a partial one, either
+// perhaps after a 'v'. Python's ==, PEP 440's ~= and RubyGems' ~> are = and ~ on whole
+// versions only, and != takes a partial version only with a wildcard.
 status parse_term(std::string_view op, std::string_view ver, term *t) {
-  t->op = op;
+  bool const whole = (op == "==") || (op == "~=") || (op == "~>");
+  t->op = (op == "==") ? "=" : whole ? "~" : op;
   t->k = 3;
+  if (!ver.empty() && (ver[0] == 'v')) {
+    ver.remove_prefix(1);
+  }
   status const st = parse(ver, &t->v);
-  return (st == status::syntax) ? parse_partial(ver, t) : st;
+  return ((st == status::syntax) && !whole) ? parse_partial(ver, t, op == "!=") : st;
+}
+
+// A comma group's comparators: its tokens, each split again before an operator that
+// follows a version with no space between, as in >=1.0.0<2.0.0.
+std::vector<std::string_view> comparator_tokens(std::string_view group) {
+  std::vector<std::string_view> out;
+  for (std::string_view tok : split_spaces(group)) {
+    size_t start = 0;
+    for (size_t i = 1; i < tok.size(); ++i) {
+      if (is_op_char(tok[i]) && !is_op_char(tok[i - 1])) {
+        out.push_back(tok.substr(start, i - start));
+        start = i;
+      }
+    }
+    out.push_back(tok.substr(start));
+  }
+  return out;
 }
 
 }  // namespace
@@ -392,31 +423,34 @@ status range_match(std::string_view range, version const &v, bool exclude_pre, b
     if (piece.find('|') != std::string_view::npos) {
       return status::syntax;
     }
-    std::vector<std::string_view> const toks = split_spaces(piece);
-    if (toks.empty()) {
-      return status::syntax;
-    }
+    // Comma groups, none of them empty: a comma stands between two comparators.
     std::vector<term> set;
-    for (size_t i = 0; i < toks.size(); ++i) {
-      std::string_view const op = op_prefix(toks[i]);
-      std::string_view ver;
-      if (op.size() == toks[i].size()) {  // an operator alone: the next token is its version
-        if (++i == toks.size()) {
-          return status::syntax;
+    for (std::string_view const group : split(piece, ',')) {
+      std::vector<std::string_view> const toks = comparator_tokens(group);
+      if (toks.empty()) {
+        return status::syntax;
+      }
+      for (size_t i = 0; i < toks.size(); ++i) {
+        std::string_view const op = op_prefix(toks[i]);
+        std::string_view ver;
+        if (op.size() == toks[i].size()) {  // an operator alone: the next token is its version
+          if (++i == toks.size()) {
+            return status::syntax;
+          }
+          ver = toks[i];
+        } else {
+          ver = toks[i].substr(op.size());
         }
-        ver = toks[i];
-      } else {
-        ver = toks[i].substr(op.size());
+        term t;
+        status const st = parse_term(op, ver, &t);
+        if (st == status::syntax) {
+          return st;
+        }
+        if (first == status::ok) {
+          first = st;
+        }
+        set.push_back(t);
       }
-      term t;
-      status const st = parse_term(op, ver, &t);
-      if (st == status::syntax) {
-        return st;
-      }
-      if (first == status::ok) {
-        first = st;
-      }
-      set.push_back(t);
     }
     sets.push_back(set);
   }

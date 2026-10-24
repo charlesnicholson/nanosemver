@@ -4,7 +4,8 @@
 // the corpus versions,
 // every range of up to two comparators built from a few operators and versions, whole
 // and partial, against versions around them, and generated ranges from the fuzz
-// generator. Ranges with !=, which npm has not, go too; the judge counts them aside.
+// generator. Ranges with !=, which npm has not, go too; the judge counts them aside. The
+// other grammars' spellings go as they are, and the judge respells them as npm's.
 //
 //   nsv_npm_emit [generated-count [seed]]
 #include "../corpus.h"
@@ -70,7 +71,10 @@ int main(int argc, char **argv) {
     }
   }
 
-  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~" };
+  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "==", "~=", "~>" };
+  // Between two comparators of a set, in turn; "" only before an operator.
+  static char const *const ands[] = { " ", ", ", ",", "" };
+  size_t turn = 0;
   static char const *const vers[] = { "0.0.0", "0.0.3", "0.2.3", "1.2.3", "1.2.3-rc.1",
                                       "2.0.0-0", "1.2", "1", "1.x", "*", "0.2", "0", "0.0" };
   static char const *const tests[] = { "0.0.0-rc", "0.0.0", "0.0.3-rc", "0.0.3", "0.0.4",
@@ -85,7 +89,8 @@ int main(int argc, char **argv) {
       }
       for (char const *o2 : ops) {
         for (char const *v2 : vers) {
-          for (char const *sep : { " ", " || " }) {
+          char const *const a = ands[turn++ % 4];
+          for (char const *sep : { (*a || *o2) ? a : " ", " || " }) {
             for (char const *t : tests) {
               emit(c1 + sep + o2 + v2, t);
             }

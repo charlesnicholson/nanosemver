@@ -32,12 +32,14 @@ int cmp(version const &a, version const &b);
 // first, so it is quadratic.
 status parse_prefix(std::string_view s, version *out, size_t *consumed);
 
-// nsv_range_match's grammar and meaning, by splitting: sets on "||", comparators on
-// whitespace, a token that is all operator taking the next as its version, which is
-// whole or else partial (1.2, 1.x, *). ^, ~ and partial versions are npm's bounds,
-// written out and compared in 64 bits so they cannot overflow; != negates the whole
-// line. On ok, *match is whether v satisfies the range; otherwise the status is the
-// range's first error, syntax before any other.
+// nsv_range_match's grammar and meaning, by splitting: sets on "||", then on commas into
+// groups none of which is empty, comparators on whitespace and again before an operator
+// that follows a version, a token that is all operator taking the next as its version,
+// which after an optional v is whole or else partial (1.2, 1.x, *). ==, ~= and ~> are =
+// and ~ on whole versions only, and != takes a partial version only with a wildcard. ^, ~
+// and partial versions are npm's bounds, written out and compared in 64 bits so they
+// cannot overflow; != negates the whole line. On ok, *match is whether v satisfies the
+// range; otherwise the status is the range's first error, syntax before any other.
 status range_match(std::string_view range, version const &v, bool exclude_pre, bool *match);
 
 // One comparator, e.g. ">=1.2": whether v passes it, and whether it names a pre-release

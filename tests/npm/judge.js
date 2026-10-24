@@ -1,7 +1,8 @@
 // Reads tests/npm/emit.cc's cases on stdin and holds each to npm's semver package, whose
-// directory is $SEMVER: npm must accept every range nanosemver does, and answer the same,
-// its includePrerelease against flags 0 and its default against NSV_RANGE_EXCLUDE_PRE.
-// Exits nonzero on any disagreement but the two kinds npm's own limits and rules explain.
+// directory is $SEMVER: npm must accept every range nanosemver does, spelled as npm's,
+// and answer the same, its includePrerelease against flags 0 and its default against
+// NSV_RANGE_EXCLUDE_PRE. Exits nonzero on any disagreement but the two kinds npm's own
+// limits and rules explain.
 'use strict';
 const semver = require(process.env.SEMVER);
 const lines = require('fs').readFileSync(0, 'utf8').split('\n').filter(Boolean);
@@ -18,13 +19,20 @@ const wild = '[xX*](\\.[xX*]){0,2}';
 const npmAny = (r, v) => (semver.prerelease(v) !== null) &&
     new RegExp(`(^|[\\s|])((>=|\\^|~|=)?\\s*${zero}|(>=|<=|\\^|~|=)?\\s*${wild})(?=$|[\\s|])`)
         .test(r);
-// != is not npm's: nanosemver's one extension, held to the reference tests instead.
+// != is not npm's, and has no npm spelling: held to the reference tests instead.
 const notNpm = r => r.includes('!=');
+// The other grammars' spellings nanosemver takes, as npm's: a comma between comparators
+// is a space, == is =, and comparators run together get a space between them. npm has
+// ~=, ~> and v1.2.3 already.
+const toNpm = r => r.replace(/\s*,\s*/g, ' ').replace(/==/g, '=')
+    .replace(/([^\s<>=!^~|])(?=[<>=^~])/g, '$1 ');
 
-let checked = 0, beyond = 0, any = 0, extension = 0;
+let checked = 0, beyond = 0, any = 0, extension = 0, respelled = 0;
 const failures = [];
 for (const line of lines) {
-  const [range, version, plain, excl] = JSON.parse(line);
+  const [given, version, plain, excl] = JSON.parse(line);
+  const range = toNpm(given);
+  respelled += (range !== given);
   if (beyondNpm(range) || beyondNpm(version)) {
     beyond++;
     continue;
@@ -55,8 +63,8 @@ for (const line of lines) {
 }
 console.log(`npm semver ${require(process.env.SEMVER + '/package.json').version}: ` +
             `${checked} cases, ${failures.length} disagree; ${any} differ only where npm ` +
-            `reads >=0.0.0 or * as it does; ${beyond} beyond npm's limits and ` +
-            `${extension} with != skipped`);
+            `reads >=0.0.0 or * as it does; ${respelled} respelled as npm's; ${beyond} ` +
+            `beyond npm's limits and ${extension} with != skipped`);
 for (const f of failures.slice(0, 20)) {
   console.log('  ' + f);
 }

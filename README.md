@@ -114,35 +114,45 @@ semver.org's own example, in order:
 `nsv_range_match(s, len, v, flags)` answers whether `v` is in a range like
 `>=1.2.0 <1.4.0 || ^2.1.0`. There is no range standard: semver.org defines versions and
 precedence, nothing more. The nearest thing is npm's
-[grammar](https://github.com/npm/node-semver#range-grammar), which Composer, Conan and
-Neargye's C++ semver follow closely too. nanosemver takes npm's, without hyphen ranges,
-plus `!=`, and npm reads every range nanosemver accepts the same way.
+[grammar](https://github.com/npm/node-semver#range-grammar), which Composer and Conan
+follow closely too. nanosemver takes npm's, without hyphen ranges, plus `!=` and the few
+spellings from other grammars that mean the same in all of them. npm reads every range
+nanosemver accepts, spelled as npm's, the same way.
 
 ### Syntax
 
 - A **range** is one or more comparator sets separated by `||`, with optional spaces or
   tabs around it. `v` is in the range if it is in any set.
-- A **set** is one or more comparators separated by spaces or tabs. `v` is in the set if
-  it satisfies every comparator in it.
+- A **set** is one or more comparators separated by spaces, tabs or a comma, or by
+  nothing before an operator. `v` is in the set if it satisfies every comparator in it.
 - A **comparator** is an optional operator, optional spaces or tabs, and a version:
-  `=`, `<`, `<=`, `>`, `>=`, `!=`, `~` or `^`, then `1.2.3`; no operator means `=`.
+  `=`, `<`, `<=`, `>`, `>=`, `!=`, `~` or `^`, or another grammar's `==`, `~=` or `~>`,
+  then `1.2.3`; no operator means `=`.
 - The **version** is a full semver 2.0.0 version, or a **partial** one: one to three
   components, numbers then wildcards (`x`, `X` or `*`), with no pre-release or build, as
-  in `1`, `1.2`, `1.x`, `1.2.*` and `*`.
-- The whole string must parse: an empty range, a stray `|`, comparators run together, and
-  anything left over are all `NSV_RET_ERR_SYNTAX`, however `v` compares.
+  in `1`, `1.2`, `1.x`, `1.2.*` and `*`. Either may start with a `v`, as in npm:
+  `v1.2.3`, `>=v1.2`.
+- The whole string must parse: an empty range, a stray `|` or comma, and anything left
+  over are all `NSV_RET_ERR_SYNTAX`, however `v` compares.
+
+Spaces and commas only ever separate: they never change what anything means. A version
+ends where its characters do, so `>=1.0.0<2.0.0` is `>=1.0.0 <2.0.0` and
+`>=1.2, <1.5` is `>=1.2 <1.5`; a space is needed only where two things would otherwise
+run together, as two versions would. That rule is why npm's hyphen ranges are out:
+`1.2.3 - 2.3.4` is a range only because of its spaces, and `1.2.3-2.3.4` is one
+pre-release version.
 
 ### Whole versions
 
 | Comparator | Means | Matches | Does not match |
 |---|---|---|---|
-| `1.2.3`, `=1.2.3` | equal precedence | `1.2.3`, `1.2.3+build` | `1.2.4`, `1.2.3-rc` |
+| `1.2.3`, `=1.2.3`, `==1.2.3` | equal precedence | `1.2.3`, `1.2.3+build` | `1.2.4`, `1.2.3-rc` |
 | `!=1.2.3` | not equal | `1.2.4`, `1.2.3-rc` | `1.2.3`, `1.2.3+b` |
 | `<1.2.3` | below | `1.2.2`, `1.2.3-rc` | `1.2.3` |
 | `<=1.2.3` | at or below | `1.2.3` | `1.2.4-0` |
 | `>1.2.3` | above | `1.2.4-0`, `1.3.0` | `1.2.3+b` |
 | `>=1.2.3` | at or above | `1.2.3` | `1.2.3-rc` |
-| `~1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` | `1.2.9` | `1.2.2`, `1.3.0-0` |
+| `~1.2.3`, `~=1.2.3`, `~>1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` | `1.2.9` | `1.2.2`, `1.3.0-0` |
 | `^1.2.3` | `>=1.2.3 <2.0.0-0`: the same leftmost nonzero number | `1.9.0` | `2.0.0-rc.1` |
 | `^0.2.3` | `>=0.2.3 <0.3.0-0` | `0.2.9` | `0.3.0` |
 | `^0.0.3` | `>=0.0.3 <0.0.4-0` | `0.0.3` | `0.0.4` |
@@ -160,7 +170,7 @@ compare lines:
 | `1.2`, `1.2.x`, `=1.2` | `>=1.2.0-0 <1.3.0-0` | `1.2.0-beta`, `1.2.99` | `1.3.0-0` |
 | `1`, `1.x`, `1.*.*` | `>=1.0.0-0 <2.0.0-0` | `1.0.0-0`, `1.99.0` | `2.0.0-0` |
 | `*`, `x` | everything | `0.0.0-0`, `9.9.9` | |
-| `!=1.4` | off the 1.4 line | `1.3.9`, `1.5.0` | `1.4.0-0`, `1.4.99` |
+| `!=1.4.x` | off the 1.4 line | `1.3.9`, `1.5.0` | `1.4.0-0`, `1.4.99` |
 | `<1.2` | below the 1.2 line: `<1.2.0-0` | `1.1.99` | `1.2.0-0` |
 | `<=1.2` | up to the end of it: `<1.3.0-0` | `1.2.99` | `1.3.0-0` |
 | `>1.2` | above it: `>=1.3.0-0` | `1.3.0-0` | `1.2.99` |
@@ -173,6 +183,11 @@ compare lines:
 At the top of the range, `>1.4294967295` carries into the next number, so it matches
 `2.0.0`, and nothing is above `>4294967295`.
 
+`==`, `~=` and `~>` take no partial version, and `!=` one only with a wildcard: the
+grammars those operators come from read `==1.2` and `!=1.2` as 1.2.0, and `~=1.2` and
+`~>1.2` as `>=1.2 <2`, where npm's terms would make each the 1.2 line. Rather than guess,
+each is a syntax error.
+
 ### Combining
 
 | Range | Matches | Does not match |
@@ -180,6 +195,8 @@ At the top of the range, `>1.4294967295` carries into the next number, so it mat
 | `>=1.2.0 <1.4.0 \|\| ^2.1.0` | `1.3.5`, `2.5.0` | `2.0.0` |
 | `>=1.2 !=1.3.1 <2` | `1.3.2` | `1.3.1` |
 | `>= 1.2.3 < 2` | `1.5.0` | `2.0.0` |
+| `>=1.2, <1.5` | `1.4.9` | `1.5.0` |
+| `>=1.0.0<2.0.0 \|\| v3.0.0` | `3.0.0` | `2.0.0` |
 
 ### Pre-releases
 
@@ -214,18 +231,25 @@ the range beyond nanosemver's limits, a number past `UINT32_MAX` (`<4294967296.0
 
 ### Coming from another grammar
 
-Each of these is a syntax error, not a guess at what was meant:
+Other grammars' spellings that mean the same in all of them are taken as they are:
 
-| Written | Grammar | In nanosemver |
+| Written | Grammar | Same as |
 |---|---|---|
-| `1.2.3 - 2.3.4` | npm | `>=1.2.3 <=2.3.4` |
-| `>=1.2, <1.5` | Cargo, Python (PEP 440) | `>=1.2 <1.5` |
-| `==1.2.3` | Python, Composer | `1.2.3` or `=1.2.3` |
+| `>=1.2, <1.5` | Cargo, Python (PEP 440), Composer | `>=1.2 <1.5` |
+| `==1.2.3` | Python, Composer | `=1.2.3` |
 | `~=1.4.5` | Python | `~1.4.5` |
 | `~> 1.4.5` | RubyGems, Hex | `~1.4.5` |
 | `v1.2.3`, `=v1.2.3` | npm | `1.2.3` |
-| `>=1.0.0<2.0.0` | Neargye 1.0.0-rc | `>=1.0.0 <2.0.0` |
-| an empty range | npm, meaning any | `*` |
+| `>=1.0.0<2.0.0` | | `>=1.0.0 <2.0.0` |
+
+The rest are syntax errors, not a guess at what was meant:
+
+| Written | Grammar | Why not | Write |
+|---|---|---|---|
+| `1.2.3 - 2.3.4` | npm | its spaces make it a range: `1.2.3-2.3.4` is one version | `>=1.2.3 <=2.3.4` |
+| `==1.2`, `!=1.2` | Python, Composer | 1.2.0 there, the 1.2 line in npm's terms | `==1.2.0` or `1.2.x`; `!=1.2.0` or `!=1.2.x` |
+| `~=1.4`, `~>1.4` | Python; RubyGems, Hex | `>=1.4 <2` there, the 1.4 line in npm's | `>=1.4 <2` or `~1.4` |
+| an empty range | npm, meaning any | an unset field would match everything | `*` |
 
 And one that is not an error but means something else elsewhere: Cargo reads a bare
 `1.2.3` as `^1.2.3`; here it is exactly `1.2.3`.
@@ -239,7 +263,9 @@ pre-releases the other sets name. nanosemver does neither. Everywhere else,
 `make npm-check` holds it to npm's own semver package: a million generated ranges,
 every range of up to two comparators over the operators and whole and partial versions,
 the unit tests' own cases, and the test corpus, against versions around their bounds.
-Ranges with `!=` are left to the reference tests.
+Ranges with commas, `==` or comparators run together go to npm respelled as its own
+(`>=1.2 <1.5`, `=1.2.3`, `>=1.0.0 <2.0.0`), and ranges with `!=`, which has no npm
+spelling, are left to the reference tests.
 
 ## Building
 
@@ -248,7 +274,7 @@ divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linke
 either: `NSV_SOFT_DIV` selects that, 1 by default on Cortex-M0/M0+/M1, AVR, MSP430 and
 RISC-V without M, 0 elsewhere; define it to override. Built with `-ffunction-sections`
 and linked with `--gc-sections`, a program pays only for the functions it calls: on a
-Cortex-M0+, range matching adds about 850 bytes to parsing and comparing, and prefix
+Cortex-M0+, range matching adds about 950 bytes to parsing and comparing, and prefix
 parsing shares the parser's code.
 
 ## Development
