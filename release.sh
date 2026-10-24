@@ -41,13 +41,14 @@ has_lines() {
     }
   done <<< "$1"
 }
-# nanosemver.hpp's check that it builds against its own release's nanosemver.h.
+# nanosemver.hpp's check that it builds against its own release's nanosemver.h, by the
+# whole version $1.
 hpp_check() {
-  printf '%s\n' "#if (NSV_VERSION_MAJOR != $1) || (NSV_VERSION_MINOR != $2) || (NSV_VERSION_PATCH != $3)"
+  printf '%s\n' "static_assert(detail::same(NSV_VERSION, \"$1\"),"
 }
 unstamped="$(version_macros 0 0 0 0.0.0)"
 has_lines "$unstamped" nanosemver.h
-has_lines "$(hpp_check 0 0 0)" nanosemver.hpp
+has_lines "$(hpp_check 0.0.0)" nanosemver.hpp
 if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
@@ -79,8 +80,8 @@ while IFS= read -r from && IFS= read -r to <&3; do
 done <<< "$unstamped" 3<<< "$stamped"
 sed "${sed_args[@]}" nanosemver.h > "$out/nanosemver.h"
 has_lines "$stamped" "$out/nanosemver.h"
-from="$(hpp_check 0 0 0)"
-to="$(hpp_check "$major" "$minor" "$patch")"
+from="$(hpp_check 0.0.0)"
+to="$(hpp_check "$ver")"
 sed -e "s/$placeholder/$tag/" -e "s/^${from//./\\.}\$/$to/" nanosemver.hpp > "$out/nanosemver.hpp"
 has_lines "$to" "$out/nanosemver.hpp"
 cp nanosemver.c "$out/"

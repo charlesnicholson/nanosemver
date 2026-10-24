@@ -11,13 +11,19 @@
 
 #include "nanosemver.h"
 
-/* release.sh stamps this with the release, as it does nanosemver.h's NSV_VERSION_*, so a
-   nanosemver.hpp only builds against the nanosemver.h it shipped with. */
-#if (NSV_VERSION_MAJOR != 0) || (NSV_VERSION_MINOR != 0) || (NSV_VERSION_PATCH != 0)
-#error "nanosemver.hpp and nanosemver.h are from different releases"
-#endif
-
 namespace nsv {
+
+namespace detail {
+constexpr bool same(char const *a, char const *b) {
+  return (*a == *b) && (!*a || same(a + 1, b + 1));
+}
+}  // namespace detail
+
+/* release.sh stamps this with the release, as it does nanosemver.h's NSV_VERSION, so a
+   nanosemver.hpp only builds against the nanosemver.h it shipped with: the whole version,
+   so not v1.4.0's against v1.4.0-rc.2's. */
+static_assert(detail::same(NSV_VERSION, "0.0.0"),
+              "nanosemver.hpp and nanosemver.h are from different releases");
 
 /* An nsv_copy blob and its owner, one pointer in size: unlike a view from nsv_parse, it
    never dangles, as it needs nothing of the string it came from. Copying a version copies

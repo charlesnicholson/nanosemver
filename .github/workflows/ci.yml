@@ -49,10 +49,18 @@ jobs:
           head -1 build/release/nanosemver.hpp | grep -q '^/\* nanosemver v12.34.56-ci.7:'
           printf '%s\n' '#include "nanosemver.hpp"' > build/release/stamp.cc
           c++ -std=c++11 -Wall -Werror -fno-exceptions -fno-rtti -c build/release/stamp.cc -o /dev/null
-          # A stamped nanosemver.hpp refuses another release's nanosemver.h.
-          mkdir -p build/release/mixed
-          cp nanosemver.h build/release/nanosemver.hpp build/release/stamp.cc build/release/mixed/
-          ! c++ -std=c++11 -c build/release/mixed/stamp.cc -o /dev/null 2>/dev/null
+          # A stamped nanosemver.hpp refuses another release's nanosemver.h: the checked-in
+          # one, and one that differs only in the pre-release. Not `! c++ ...`, which bash -e
+          # never stops on.
+          ./release.sh v12.34.56 build/release-final > /dev/null
+          for h in nanosemver.h build/release-final/nanosemver.h; do
+            mkdir -p build/release/mixed
+            cp "$h" build/release/nanosemver.hpp build/release/stamp.cc build/release/mixed/
+            if c++ -std=c++11 -c build/release/mixed/stamp.cc -o /dev/null 2>/dev/null; then
+              echo "the v12.34.56-ci.7 nanosemver.hpp built against $h" >&2
+              exit 1
+            fi
+          done
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip
           unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.h \
             | cmp - build/release/nanosemver.h
