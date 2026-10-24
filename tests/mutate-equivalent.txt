@@ -1,6 +1,8 @@
 # Mutants of nanosemver.c that change nothing a caller can observe, so no test can kill
 # them; tests/mutate.py skips them. One per line: the mutation, " @ ", the line it is on
 # (trimmed), then two spaces, "#" and why it is equivalent.
+10u -> 11u @ return ((unsigned)(unsigned char)c - '0') < 10u;  # only nsv_cmp_pre asks, and a pre-release never holds ':'
+< -> <= @ return ((unsigned)(unsigned char)c - '0') < 10u;  # only nsv_cmp_pre asks, and a pre-release never holds ':'
 1 -> 2 @ alpha = 1;  # alpha is only tested for zero
 > -> != @ if (pre && !alpha && (*b == '0') && ((p - b) > 1)) {  # p > b here: the identifier is not empty
 3 -> 4 (2nd) @ uint32_t num[3], *n;  # a bigger array, which the loop leaves at num + 3
