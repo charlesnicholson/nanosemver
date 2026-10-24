@@ -23,7 +23,8 @@
 #   test        (default) the unit tests, built twice: as configured, and as for a
 #               small MCU like an AVR, whose 16-bit int needs the length checks that
 #               -DNSV_INT_MAX=32767 compiles in, division by shifts, and nsv_cmp's
-#               32-bit compare
+#               32-bit compare; and nanosemver.hpp compiled on its own as C++11 to
+#               C++23, with and without exceptions and RTTI
 #   fuzz        the standalone fuzz driver; any compiler
 #   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
@@ -132,16 +133,24 @@ FUZZ_SRCS := nanosemver.c tests/fuzz/driver.cc tests/ref_semver.cc $(FUZZ_LIB_SR
 UNIT_OBJS := $(patsubst %,$(BUILD)/%.o,$(UNIT_SRCS))
 INT16_OBJS := $(patsubst %,$(BUILD)/int16/%.o,$(INT16_SRCS))
 FUZZ_OBJS := $(patsubst %,$(BUILD)/%.o,$(FUZZ_SRCS))
-# nanosemver.c also has to build as C11, though nothing links that object.
+# nanosemver.c also has to build as C11, and nanosemver.hpp on its own under every C++
+# standard from C++11, with and without exceptions and RTTI, though nothing links those
+# objects. Outside $(BUILD)/tests, where tests/mutate.py would link them.
 C11_OBJ := $(BUILD)/c11/nanosemver.c.o
-ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ))
+HPP_SRC := tests/hpp/standalone.cc
+HPP_STDS := c++11 c++14 c++17 c++20 c++23
+HPP_OBJS := $(patsubst %,$(BUILD)/hpp/%.o,$(HPP_STDS))
+HPP_NOEXC_OBJS := $(patsubst %,$(BUILD)/hpp/%-noexcept.o,$(HPP_STDS))
+ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ) $(HPP_OBJS) \
+                   $(HPP_NOEXC_OBJS))
 
 # --- rules ------------------------------------------------------------------------
 .PHONY: test fuzz libfuzzer coverage bench bench-cm size size-check ratchet ratchet-update \
         npm-check mutate clean FORCE
 .DEFAULT_GOAL := test
 
-test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ)
+test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ) $(HPP_OBJS) \
+      $(HPP_NOEXC_OBJS)
 
 $(BUILD)/int16/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
@@ -157,6 +166,19 @@ $(BUILD)/c11/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(MSG) CC "$< (c11)"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -c $< -o $@
+
+# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI.
+HPP_FLAGS := $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(EXTRA_FLAGS)
+
+$(HPP_OBJS): $(BUILD)/hpp/%.o: $(HPP_SRC) Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX "$< ($*)"
+	$(Q)$(CXX) $(CPPFLAGS) -std=$* $(HPP_FLAGS) -c $< -o $@
+
+$(HPP_NOEXC_OBJS): $(BUILD)/hpp/%-noexcept.o: $(HPP_SRC) Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX "$< ($*, no exceptions or RTTI)"
+	$(Q)$(CXX) $(CPPFLAGS) -std=$* $(HPP_FLAGS) -fno-exceptions -fno-rtti -c $< -o $@
 
 $(BUILD)/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)

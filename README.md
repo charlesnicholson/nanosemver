@@ -7,7 +7,7 @@
 Parse, compare, format and match ranges of [Semantic Versioning 2.0.0](https://semver.org)
 strings in C99. Parsing is done in place: it never allocates, never copies, and reads only
 the bytes you give it. Two files, `nanosemver.h` and `nanosemver.c`, needing nothing from
-the C library beyond `memcpy`.
+the C library beyond `memcpy`; for C++, an optional third, the header `nanosemver.hpp`.
 
 ```c
 #include "nanosemver.h"
@@ -90,6 +90,46 @@ Every function returns `int`: `>= 0` is success, often a length, and `< 0` is an
 The spec sets no limits on length or numeric size; nanosemver's are `uint32_t` numbers
 and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` and
 `TOO_LONG` only ever describe valid semver.
+
+## C++
+
+`nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
+still built as C. Its `nsv::version` owns its own copy, one allocation holding the header
+and both strings, so it never dangles the way a view can. Errors come back without
+exceptions: whatever can fail returns an `NSV_RET_*` code and leaves the version as it
+was. It needs C++11 or later and nothing from the standard library, and builds without
+exceptions or RTTI.
+
+```cpp
+#include "nanosemver.hpp"
+
+nsv::version v, w;  // 0.0.0, allocating nothing
+if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
+w.parse("1.4.0");
+bool const older = v < w;  // true: a pre-release ranks below its release
+int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0 on error
+char buf[32];
+int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
+char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
+```
+
+- `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
+  does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
+  `nsv_semver_t`, a view, copy or literal, and so does the constructor `nsv::version(c)`,
+  which leaves `0.0.0` where `assign` would return an error. (`NSV_SEMVER_LIT` itself
+  needs C++20 in C++, for its designated initializers.)
+- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, so `==` ignores build
+  metadata: `1.0.0+a == 1.0.0+b`.
+- `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
+  return what `nsv_range_match` does: 1, 0, or an `NSV_RET_ERR_*` code. Test for `== 1`,
+  since an error is nonzero too.
+- `major()`, `minor()` and `patch()` are the numbers; `pre()` and `build()` are
+  NUL-terminated, and `""` when absent; `format(dst, n)` is `nsv_format`.
+- `semver()` is the version for the C API: pass `&v.semver()`, but never copy it, since
+  it is a copy's header.
+- Copying a version copies its allocation, moving hands it over, and a moved-from version
+  is `0.0.0`. Allocation is `::operator new`'s, so running out of memory throws
+  `std::bad_alloc`, or without exceptions ends the program.
 
 ## Comparing versions
 
@@ -269,8 +309,9 @@ spelling, are left to the reference tests.
 
 ## Building
 
-Add `nanosemver.c` to your build. It calls nothing but `memcpy`. On cores without a fast
-divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linked in
+Add `nanosemver.c` to your build, as C; from C++, optionally include `nanosemver.hpp`,
+which has nothing to build. `nanosemver.c` calls nothing but `memcpy`. On cores without a
+fast divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linked in
 either: `NSV_SOFT_DIV` selects that, 1 by default on Cortex-M0/M0+/M1, AVR, MSP430 and
 RISC-V without M, 0 elsewhere; define it to override. Built with `-ffunction-sections`
 and linked with `--gc-sections`, a program pays only for the functions it calls: on a
@@ -286,7 +327,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
 | `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
@@ -297,7 +338,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 | `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
 | `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
 | `make mutate MUTATE_ARGS="--jobs 8 --shard 0/4"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |
-| `build.bat [fuzz \| clean]` | the unit tests, both configurations, and optionally the fuzz driver, with MSVC |
+| `build.bat [fuzz \| clean]` | the unit tests, both configurations, `nanosemver.hpp` on its own under each C++ standard MSVC has, and optionally the fuzz driver, with MSVC |
 
 The tests check `nanosemver.c` against a deliberately naive reference implementation in
 `tests/ref_semver.cc`, which is itself checked against the regular expression semver.org
@@ -322,6 +363,10 @@ repetition change nothing, a set of bounds admits an unbroken run of versions,
 `NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
 metadata on the version never matters.
 
+`tests/test_hpp.cc` holds `nsv::version` to the C API under it: every parse, prefix parse,
+comparison, range match and format against the C function's own answer, every error
+leaving the version as it was, and copies that outlive their source string.
+
 `make mutate` measures all of that: it makes a thousand small changes to
 `nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a
 dropped statement, and fails unless the tests catch every one that changes behavior.
@@ -332,12 +377,13 @@ with their reasons in `tests/mutate-equivalent.txt`.
 
 Push a tag like `v1.2.0` (or `v1.2.0-rc.1`, published as a pre-release). CI runs the
 whole matrix against it and, only if everything passes, `release.sh` stamps the tag
-into `nanosemver.h` and publishes it as a GitHub release, alongside `nanosemver.c` and a
-zip of the full source carrying the same stamped header. The stamp is the first line,
-and `NSV_VERSION_MAJOR`, `NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and the string
-`NSV_VERSION` (`"1.2.0-rc.1"`), for code that reports or checks which nanosemver it has.
-The checked-in header keeps its `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever
-bumps a version. `./release.sh v1.2.0` shows locally what a tag would ship.
+into `nanosemver.h` and publishes it as a GitHub release, alongside `nanosemver.c`,
+`nanosemver.hpp` and a zip of the full source carrying the same stamped header. The stamp
+is the first line, and `NSV_VERSION_MAJOR`, `NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and
+the string `NSV_VERSION` (`"1.2.0-rc.1"`), for code that reports or checks which
+nanosemver it has. The checked-in header keeps its `@NSV_VERSION@` placeholder and 0.0.0,
+so no commit ever bumps a version. `./release.sh v1.2.0` shows locally what a tag would
+ship.
 
 ## License
 

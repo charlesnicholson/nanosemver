@@ -7,7 +7,8 @@ REM vcvars64.bat; the target architecture is whatever that environment sets up.
 REM
 REM   build.bat         build and run the unit tests, as configured and as for a small
 REM                     MCU: -DNSV_INT_MAX=32767 (the checks a 16-bit int needs),
-REM                     division by shifts, and nsv_cmp's 32-bit compare
+REM                     division by shifts, and nsv_cmp's 32-bit compare; and compile
+REM                     nanosemver.hpp on its own under each C++ standard MSVC has
 REM   build.bat fuzz    then run the standalone fuzz driver (FUZZ_ARGS, default -t 30)
 REM   build.bat clean   delete build\ except the envy package cache
 REM
@@ -28,6 +29,16 @@ if not defined DOCTEST_DIR (
 set "OUT=build\msvc"
 set "CFLAGS=/nologo /W4 /WX /std:c11 /O1 /Z7 /I."
 set "CXXFLAGS=/nologo /W4 /WX /EHsc /std:c++20 /permissive- /O1 /Z7 /I. /external:W0 /external:I "%DOCTEST_DIR%""
+
+REM nanosemver.hpp on its own, with and without exceptions and RTTI: compiled, never
+REM linked. Without exceptions MSVC flags every noexcept (C4577), whatever the code.
+set "DIR=%OUT%\hpp"
+if not exist %DIR% mkdir %DIR%
+set "HPPFLAGS=/nologo /W4 /WX /permissive- /O1 /I. /c tests\hpp\standalone.cc"
+for %%s in (c++14 c++17 c++20 c++latest) do (
+  cl %HPPFLAGS% /std:%%s /EHsc /Fo%DIR%\%%s.obj || exit /b 1
+  cl %HPPFLAGS% /std:%%s /EHs-c- /GR- /wd4577 /Fo%DIR%\%%s-noexcept.obj || exit /b 1
+)
 
 call :unit unit "" "" || exit /b 1
 call :unit int16 "/DNSV_INT_MAX=32767 /DNSV_SOFT_DIV=1 /DNSV_WIDE_CMP=0" "tests\int16\test_int16.cc" || exit /b 1
