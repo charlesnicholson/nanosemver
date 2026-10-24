@@ -26,10 +26,15 @@
 
 extern "C" {
 int nsvbase_parse(nsv_semver_t *out, char const *s, size_t len);
+int nsvbase_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed);
 int nsvbase_cmp(nsv_semver_t const *a, nsv_semver_t const *b);
+int nsvbase_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags);
 int nsvbase_copy(void *dst, size_t cap, nsv_semver_t const *s);
 int nsvbase_format(char *dst, size_t n, nsv_semver_t const *s);
 }
+
+// What bench/base_stub.c's stand-ins return for a BENCH_BASE that predates them.
+#define NSV_BENCH_ABSENT (-1000)
 
 namespace {
 
@@ -38,13 +43,23 @@ namespace {
 struct impl {
   char const *name;
   int (*parse)(nsv_semver_t *, char const *, size_t);
+  int (*parse_prefix)(nsv_semver_t *, char const *, size_t, size_t *);
   int (*cmp)(nsv_semver_t const *, nsv_semver_t const *);
+  int (*range_match)(char const *, size_t, nsv_semver_t const *, unsigned);
   int (*copy)(void *, size_t, nsv_semver_t const *);
   int (*format)(char *, size_t, nsv_semver_t const *);
 };
 
-impl const k_base{ "base", nsvbase_parse, nsvbase_cmp, nsvbase_copy, nsvbase_format };
-impl const k_new{ "new", nsv_parse, nsv_cmp, nsv_copy, nsv_format };
+impl const k_base{ "base",          nsvbase_parse,  nsvbase_parse_prefix, nsvbase_cmp,
+                   nsvbase_range_match, nsvbase_copy, nsvbase_format };
+impl const k_new{ "new", nsv_parse, nsv_parse_prefix, nsv_cmp, nsv_range_match, nsv_copy,
+                  nsv_format };
+
+// Whether BENCH_BASE has nsv_parse_prefix and nsv_range_match, or only stand-ins.
+bool base_has_ranges() {
+  nsv_semver_t const v{};
+  return nsvbase_range_match("1.0.0", 5, &v, 0) != NSV_BENCH_ABSENT;
+}
 
 // ------------------------------------------------------------------- measurement --
 
@@ -269,6 +284,50 @@ std::string invalid_one(rng &r) {
   return s + ((k == 6) ? ".01" : "..1");
 }
 
+// A version and what follows it in a range or a list.
+std::string prefix_one(rng &r) {
+  static char const *const k_tails[] = { "", " ", " <2.0.0", ", 1.4.0", " || ^2.1.0" };
+  std::string s = mix_one(r);
+  return s + r.pick(k_tails);
+}
+
+// Ranges as package manifests write them: mostly ^ and ~, then bounded pairs, exact
+// versions, alternatives, and pre-release bounds.
+std::string range_one(rng &r) {
+  uint32_t const k = r.below(100);
+  std::string s;
+  if (k < 35) {
+    s = "^" + core(r);
+  } else if (k < 50) {
+    s = "~" + core(r);
+  } else if (k < 75) {
+    s = ">=" + core(r);
+    s += " <" + core(r);
+  } else if (k < 85) {
+    s = core(r);
+  } else if (k < 95) {
+    s = ">=" + core(r);
+    s += " <" + core(r);
+    s += " || ^" + core(r);
+  } else {
+    s = ">=" + core(r);
+    s += "-0 <" + core(r);
+    s += "-0";
+  }
+  return s;
+}
+
+// Several alternatives, each a bounded pair: every set is parsed and compared.
+std::string range_or(rng &r) {
+  std::string s;
+  for (int i = 0; i < 4; ++i) {
+    s += i ? " || >=" : ">=";
+    s += core(r);
+    s += " <" + core(r);
+  }
+  return s;
+}
+
 // Strings packed back to back in one buffer, the way a manifest or lockfile holds
 // them: no NULs, every parse bounded by its length alone.
 struct strings {
@@ -334,8 +393,10 @@ std::vector<row> g_rows;
 // A workload: run(impl, check) performs one batch of `ops` operations over `bytes`
 // input bytes. With check it returns a checksum of every result, computed once per
 // side outside the timing; without, something cheap that keeps the work alive.
+// With has_base false, BENCH_BASE predates the function, so only this tree's is timed.
 template <typename Run>
-void measure(config const &cfg, char const *name, size_t ops, size_t bytes, Run &&run) {
+void measure(config const &cfg, char const *name, size_t ops, size_t bytes, Run &&run,
+             bool has_base = true) {
   std::string const label = name;
   if (!cfg.filter.empty() && (label.find(cfg.filter) == std::string::npos)) {
     return;
@@ -345,8 +406,28 @@ void measure(config const &cfg, char const *name, size_t ops, size_t bytes, Run 
     return;
   }
 
-  uint64_t const ck_base = run(k_base, true), ck_new = run(k_new, true);
   volatile uint64_t sink = 0;
+  if (!has_base) {
+    if (cfg.only == &k_base) {
+      return;
+    }
+    run(k_new, true);
+    auto f = [&] { sink = sink + run(k_new, false); };
+    size_t const reps = calibrate(f, cfg.batch_ns);
+    uint64_t best = UINT64_MAX;
+    for (int i = 0; i < cfg.samples; ++i) {
+      best = std::min(best, time_batch(f, reps));
+    }
+    double const ns = static_cast<double>(best) / static_cast<double>(reps * ops);
+    if (cfg.only) {
+      std::printf("%-22s %s %8.2f ns/op\n", name, k_new.name, ns);
+    } else {
+      g_rows.push_back(row{ label, ops, bytes, 0.0, ns, 0.0, true });
+    }
+    return;
+  }
+
+  uint64_t const ck_base = run(k_base, true), ck_new = run(k_new, true);
 
   if (cfg.only) {
     auto f = [&] { sink = sink + run(*cfg.only, false); };
@@ -400,7 +481,18 @@ int report(config const &cfg) {
               "B/op", "min x", "paired x", cyc ? "  base cyc   new cyc" : "", "verdict");
   double log_sum = 0.0;
   bool bad = false;
+  size_t paired = 0;
   for (row const &r : g_rows) {
+    double const per = static_cast<double>(r.bytes) / static_cast<double>(r.ops);
+    if (r.ns_base <= 0.0) {  // BENCH_BASE predates it
+      std::printf("%-22s %9s %9.2f %8.1f %8s %8s", r.name.c_str(), "-", r.ns_new, per, "-",
+                  "-");
+      if (cyc) {
+        std::printf(" %9s %9.1f", "-", r.ns_new * cfg.ghz);
+      }
+      std::printf("  new\n");
+      continue;
+    }
     double const x = r.ns_new > 0.0 ? r.ns_base / r.ns_new : 0.0;
     char const *verdict = !r.ck_ok ? "CHECKSUM-MISMATCH"
                           : (x >= 1.10)  ? "faster"
@@ -408,16 +500,17 @@ int report(config const &cfg) {
                                          : "";
     bad |= !r.ck_ok;
     std::printf("%-22s %9.2f %9.2f %8.1f %7.2fx %7.2fx", r.name.c_str(), r.ns_base, r.ns_new,
-                static_cast<double>(r.bytes) / static_cast<double>(r.ops), x, r.paired);
+                per, x, r.paired);
     if (cyc) {
       std::printf(" %9.1f %9.1f", r.ns_base * cfg.ghz, r.ns_new * cfg.ghz);
     }
     std::printf("  %s\n", verdict);
     log_sum += std::log(x > 0.0 ? x : 1.0);
+    ++paired;
   }
   std::printf("# geomean %.2fx over %zu workloads (>1: new is faster). Under 1.10x is\n"
               "# noise until repeated; code alignment alone moves microbenchmarks 5%%.\n",
-              std::exp(log_sum / static_cast<double>(g_rows.size())), g_rows.size());
+              paired ? std::exp(log_sum / static_cast<double>(paired)) : 1.0, paired);
   if (bad) {
     std::printf("# *** CHECKSUM MISMATCH: base and new disagree; results are void. ***\n");
   }
@@ -462,6 +555,57 @@ void cmp_workload(config const &cfg, char const *name, pairs const &p) {
     }
     return ck;
   });
+}
+
+void prefix_workload(config const &cfg, char const *name, strings const &s) {
+  if (cfg.dump) {
+    for (size_t i = 0; i < s.size(); ++i) {
+      std::printf("%s\t%.*s\n", name, static_cast<int>(s.len[i]), s.at(i));
+    }
+    return;
+  }
+  std::vector<nsv_semver_t> out(s.size());
+  measure(
+      cfg, name, s.size(), s.bytes,
+      [&](impl const &im, bool check) {
+        uint64_t ck = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+          size_t n = 0;
+          int const rc = im.parse_prefix(&out[i], s.at(i), s.len[i], &n);
+          ck += static_cast<uint64_t>(static_cast<int64_t>(rc)) + n;
+        }
+        if (!check) {
+          return ck;
+        }
+        for (nsv_semver_t const &v : out) {
+          ck = fnv(ck, (uint64_t{ v.major } << 32) ^ (uint64_t{ v.minor } << 16) ^ v.patch);
+          ck = fnv(ck, (uint64_t{ v.pre_len } << 16) | v.build_len);
+        }
+        return ck;
+      },
+      base_has_ranges());
+}
+
+// Range i against version i, both from their own corpora.
+void range_workload(config const &cfg, char const *name, strings const &ranges,
+                    std::vector<nsv_semver_t> const &v, unsigned flags) {
+  if (cfg.dump) {
+    for (size_t i = 0; i < ranges.size(); ++i) {
+      std::printf("%s\t%.*s\n", name, static_cast<int>(ranges.len[i]), ranges.at(i));
+    }
+    return;
+  }
+  measure(
+      cfg, name, ranges.size(), ranges.bytes,
+      [&](impl const &im, bool) {
+        uint64_t ck = 0;
+        for (size_t i = 0; i < ranges.size(); ++i) {
+          int const rc = im.range_match(ranges.at(i), ranges.len[i], &v[i], flags);
+          ck = (ck * 3) + static_cast<uint64_t>(static_cast<int64_t>(rc));
+        }
+        return ck;
+      },
+      base_has_ranges());
 }
 
 void run_all(config const &cfg) {
@@ -601,6 +745,16 @@ void run_all(config const &cfg) {
       return ck;
     });
   };
+  {
+    strings const s_prefix = make_strings(10, prefix_one);
+    strings const s_ranges = make_strings(11, range_one);
+    strings const s_ors = make_strings(12, range_or);
+    prefix_workload(cfg, "prefix/mix", s_prefix);
+    range_workload(cfg, "range/mix", s_ranges, v_mix, 0);
+    range_workload(cfg, "range/mix-excl", s_ranges, v_mix, NSV_RANGE_EXCLUDE_PRE);
+    range_workload(cfg, "range/or4", s_ors, v_mix, 0);
+  }
+
   fmt("format/mix", v_mix, false);
   fmt("format/long", v_long, false);
   fmt("format-len/mix", v_mix, true);

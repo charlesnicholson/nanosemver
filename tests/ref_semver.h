@@ -27,4 +27,16 @@ status parse(std::string_view s, version *out);
 // Semver precedence, -1/0/1. Both must have parsed.
 int cmp(version const &a, version const &b);
 
+// The longest prefix of s that parse accepts, or would but for the limits: its status,
+// and its length in *consumed. syntax and 0 if there is none. Tries every length, longest
+// first, so it is quadratic.
+status parse_prefix(std::string_view s, version *out, size_t *consumed);
+
+// nsv_range_match's grammar and meaning, by splitting: sets on "||", comparators on
+// whitespace, a token that is all operator taking the next as its version. ^ and ~ are
+// npm's two bounds, the upper one compared in 64 bits so it cannot overflow. On ok,
+// *match is whether v satisfies the range; otherwise the status is the range's first
+// error, syntax before any other.
+status range_match(std::string_view range, version const &v, bool exclude_pre, bool *match);
+
 }  // namespace ref

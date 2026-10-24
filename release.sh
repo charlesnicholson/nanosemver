@@ -4,7 +4,8 @@
 # placeholder, so nothing checked in goes stale and no commit ever bumps a version.
 #
 #   ./release.sh vX.Y.Z [out-dir]   write into out-dir (build/release):
-#                                     nanosemver.h            stamped with the tag
+#                                     nanosemver.h            stamped with the tag,
+#                                                             NSV_VERSION* too
 #                                     nanosemver.c
 #                                     nanosemver-vX.Y.Z.zip   every tracked file, same
 #                                                             stamped header
@@ -19,6 +20,24 @@ grep -q "$placeholder" nanosemver.h || {
   echo "release.sh: nanosemver.h has no $placeholder placeholder" >&2
   exit 1
 }
+
+# The version macros, as checked in (0.0.0) and as a release of $1 MAJOR.MINOR.PATCH
+# with full version $4 has them.
+version_macros() {
+  printf '%s\n' "#define NSV_VERSION_MAJOR $1" "#define NSV_VERSION_MINOR $2" \
+    "#define NSV_VERSION_PATCH $3" "#define NSV_VERSION \"$4\""
+}
+# Fails unless every line of $1 is a line of file $2.
+has_lines() {
+  while IFS= read -r line; do
+    grep -qxF "$line" "$2" || {
+      echo "release.sh: $2 has no line '$line'" >&2
+      return 1
+    }
+  done <<< "$1"
+}
+unstamped="$(version_macros 0 0 0 0.0.0)"
+has_lines "$unstamped" nanosemver.h
 if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
@@ -41,7 +60,15 @@ name="nanosemver-$tag"
 zip_name="$name.zip"
 rm -rf "$out"
 mkdir -p "$out/$name"
-sed "s/$placeholder/$tag/" nanosemver.h > "$out/nanosemver.h"
+# Semver's characters mean nothing to sed in a replacement, so the tag needs no escaping.
+IFS=. read -r major minor patch <<< "${ver%%[-+]*}"
+stamped="$(version_macros "$major" "$minor" "$patch" "$ver")"
+sed_args=(-e "s/$placeholder/$tag/")
+while IFS= read -r from && IFS= read -r to <&3; do
+  sed_args+=(-e "s/^${from//./\\.}\$/$to/")
+done <<< "$unstamped" 3<<< "$stamped"
+sed "${sed_args[@]}" nanosemver.h > "$out/nanosemver.h"
+has_lines "$stamped" "$out/nanosemver.h"
 cp nanosemver.c "$out/nanosemver.c"
 
 # Every tracked file, modes kept, with the stamped header in place of the original.

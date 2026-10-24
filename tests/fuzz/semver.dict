@@ -1,4 +1,4 @@
-# libFuzzer dictionary: the tokens semver is built from.
+# libFuzzer dictionary: the tokens semver and its ranges are built from.
 "."
 "-"
 "+"
@@ -19,3 +19,17 @@
 "01"
 "--"
 "\x0a"
+" "
+"\x09"
+"||"
+" || "
+"<"
+"<="
+">"
+">="
+"="
+"^"
+"~"
+"-0"
+"^0.0."
+"~0."

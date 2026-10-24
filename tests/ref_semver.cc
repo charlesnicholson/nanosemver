@@ -1,5 +1,6 @@
 #include "ref_semver.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace ref {
@@ -164,6 +165,157 @@ int cmp(version const &a, version const &b) {
     }
   }
   return sign(static_cast<long long>(ai.size()) - static_cast<long long>(bi.size()));
+}
+
+status parse_prefix(std::string_view s, version *out, size_t *consumed) {
+  for (size_t n = s.size() + 1; n-- > 0;) {
+    status const st = parse(s.substr(0, n), out);
+    if (st != status::syntax) {
+      *consumed = n;
+      return st;
+    }
+  }
+  *consumed = 0;
+  return status::syntax;
+}
+
+namespace {
+
+bool is_space(char c) { return (c == ' ') || (c == '\t'); }
+
+std::vector<std::string_view> split_spaces(std::string_view s) {
+  std::vector<std::string_view> out;
+  size_t i = 0;
+  while (i < s.size()) {
+    size_t j = i;
+    while ((j < s.size()) && !is_space(s[j])) {
+      ++j;
+    }
+    if (j > i) {
+      out.push_back(s.substr(i, j - i));
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+// Longest first, so "<=" is not read as "<" then "=".
+std::string_view const k_ops[] = { "<=", ">=", "<", ">", "=", "^", "~" };
+
+std::string_view op_prefix(std::string_view tok) {
+  for (std::string_view const op : k_ops) {
+    if (tok.substr(0, op.size()) == op) {
+      return op;
+    }
+  }
+  return {};
+}
+
+struct comparator {
+  std::string_view op;
+  version v;
+};
+
+// npm's rewrite of ^c and ~c into >=c <up-0, where up is the next version they exclude.
+// up-0 ranks below every other version with up's core, so v is below it exactly when
+// v's core is.
+bool below_upper(version const &v, std::string_view op, version const &c, bool *same_core) {
+  std::uint64_t up[3] = { c.major, c.minor, c.patch };
+  if ((op == "~") || ((op == "^") && !c.major && c.minor)) {
+    up[1] += 1;
+    up[2] = 0;
+  } else if (c.major) {
+    up[0] += 1;
+    up[1] = up[2] = 0;
+  } else {
+    up[2] += 1;
+  }
+  std::uint64_t const vc[3] = { v.major, v.minor, v.patch };
+  *same_core = (vc[0] == up[0]) && (vc[1] == up[1]) && (vc[2] == up[2]);
+  return std::lexicographical_compare(vc, vc + 3, up, up + 3);
+}
+
+}  // namespace
+
+status range_match(std::string_view range, version const &v, bool exclude_pre, bool *match) {
+  std::vector<std::vector<comparator>> sets;
+  status first = status::ok;
+
+  // Sets, split on "||"; a '|' left in one is a syntax error.
+  std::vector<std::string_view> pieces;
+  for (std::string_view rest = range;;) {
+    size_t const p = rest.find("||");
+    pieces.push_back(rest.substr(0, p));
+    if (p == std::string_view::npos) {
+      break;
+    }
+    rest.remove_prefix(p + 2);
+  }
+  for (std::string_view const piece : pieces) {
+    if (piece.find('|') != std::string_view::npos) {
+      return status::syntax;
+    }
+    std::vector<std::string_view> const toks = split_spaces(piece);
+    if (toks.empty()) {
+      return status::syntax;
+    }
+    std::vector<comparator> set;
+    for (size_t i = 0; i < toks.size(); ++i) {
+      comparator c;
+      std::string_view ver;
+      c.op = op_prefix(toks[i]);
+      if (c.op.size() == toks[i].size()) {  // an operator alone: the next token is its version
+        if (++i == toks.size()) {
+          return status::syntax;
+        }
+        ver = toks[i];
+      } else {
+        ver = toks[i].substr(c.op.size());
+      }
+      status const st = parse(ver, &c.v);
+      if (st == status::syntax) {
+        return st;
+      }
+      if (first == status::ok) {
+        first = st;
+      }
+      set.push_back(c);
+    }
+    sets.push_back(set);
+  }
+  if (first != status::ok) {
+    return first;
+  }
+
+  *match = false;
+  for (std::vector<comparator> const &set : sets) {
+    bool all = true, pre_ok = !v.has_pre || !exclude_pre;
+    for (comparator const &c : set) {
+      int const k = cmp(v, c.v);
+      bool ok;
+      if (c.op == "<") {
+        ok = (k < 0);
+      } else if (c.op == "<=") {
+        ok = (k <= 0);
+      } else if (c.op == ">") {
+        ok = (k > 0);
+      } else if (c.op == ">=") {
+        ok = (k >= 0);
+      } else if ((c.op == "^") || (c.op == "~")) {
+        // npm checks both halves for a pre-release on v's core; the upper one has "-0".
+        bool upper_same_core = false;
+        ok = (k >= 0) && below_upper(v, c.op, c.v, &upper_same_core);
+        pre_ok = pre_ok || upper_same_core;
+      } else {
+        ok = (k == 0);
+      }
+      all = all && ok;
+      pre_ok = pre_ok || (c.v.has_pre && (c.v.major == v.major) && (c.v.minor == v.minor) &&
+                          (c.v.patch == v.patch));
+    }
+    *match = *match || (all && pre_ok);
+  }
+  return status::ok;
 }
 
 }  // namespace ref

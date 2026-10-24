@@ -13,7 +13,12 @@ Instruction counts are exact. Cycles come from a rough single-issue model with
 zero-wait-state memory: good for ranking variants, not a datasheet figure.
 
 usage: cmcount.py --cpu {m0,m4} --objdump PATH BASE.elf NEW.elf [--n N] [--filter S]
+       cmcount.py --cpu {m0,m4} --objdump PATH --ratchet FILE [--update] NEW.elf
        cmcount.py --dump
+
+--ratchet holds one image to FILE's cycles per call, workload by workload: any more is a
+failure, and --update lowers each to what it now takes. It never raises one; that is a
+deliberate edit to FILE.
 """
 
 import argparse
@@ -164,9 +169,50 @@ def invalid_one(r):
     return s + (".01" if k == 6 else "..1")
 
 
+TAILS = ["", " ", " <2.0.0", ", 1.4.0", " || ^2.1.0"]
+
+
+def prefix_one(r):
+    s = mix_one(r)
+    return s + r.pick(TAILS)
+
+
+def range_one(r):
+    k = r.below(100)
+    if k < 35:
+        return "^" + core(r)
+    if k < 50:
+        return "~" + core(r)
+    if k < 75:
+        s = ">=" + core(r)
+        return s + " <" + core(r)
+    if k < 85:
+        return core(r)
+    if k < 95:
+        s = ">=" + core(r)
+        s += " <" + core(r)
+        return s + " || ^" + core(r)
+    s = ">=" + core(r)
+    s += "-0 <" + core(r)
+    return s + "-0"
+
+
+def range_or(r):
+    s = ""
+    for i in range(4):
+        s += " || >=" if i else ">="
+        s += core(r)
+        s += " <" + core(r)
+    return s
+
+
 PARSE_SETS = [("core", 1, core), ("pre", 2, core_pre), ("build", 3, core_build),
               ("full", 4, core_pre_build), ("long", 5, long_one), ("mix", 6, mix_one),
               ("invalid", 7, invalid_one)]
+# Corpora for the functions a baseline may predate; bench.cc's seeds.
+OTHER_SETS = [("prefix/mix", 10, prefix_one), ("range/mix", 11, range_one),
+              ("range/or4", 12, range_or)]
+EXCLUDE_PRE = 1
 
 
 def gen(seed, f, n):
@@ -287,6 +333,7 @@ class Machine:
 
 STR = RAM + 0x100
 OUT = RAM + 0x20
+CONSUMED = RAM + 0x40
 DST = RAM + 0x8000
 
 
@@ -361,6 +408,34 @@ def run(m, n, flt):
             tc += c
         keep(name, ti, tc, len(items), ck)
 
+    # nsv_parse_prefix and nsv_range_match, where the image has them.
+    if "nsv_parse_prefix" in m.sym:
+        ti = tc = ck = 0
+        for s in gen(10, prefix_one, n):
+            b = s.encode()
+            m.put(STR, b)
+            rv, i, c = m.call("nsv_parse_prefix", OUT, STR, len(b), CONSUMED)
+            ti += i
+            tc += c
+            ck = (ck * 31 + rv + int.from_bytes(m.get(CONSUMED, 4), "little")) & M64
+        keep("prefix/mix", ti, tc, n, ck)
+
+    if "nsv_range_match" in m.sym:
+        def range_set(name, seed, f, flags):
+            ti = tc = ck = 0
+            for rs, (vs, vh) in zip(gen(seed, f, n), mix):
+                b = rs.encode()
+                m.put(STR, b)
+                rv, i, c = m.call("nsv_range_match", STR, len(b), place(0, vs, vh), flags)
+                ti += i
+                tc += c
+                ck = (ck * 3 + rv) & M64
+            keep(name, ti, tc, n, ck)
+
+        range_set("range/mix", 11, range_one, 0)
+        range_set("range/mix-excl", 11, range_one, EXCLUDE_PRE)
+        range_set("range/or4", 12, range_or, 0)
+
     fmt_set("format/mix", mix, False)
     fmt_set("format/long", parsed["long"], False)
     fmt_set("format-len/mix", mix, True)
@@ -375,6 +450,56 @@ def run(m, n, flt):
     return res
 
 
+def ratchet(path, cpu, res, update):
+    """Checks res against the ratchet file, and with update lowers it. 0 if within."""
+    lines, limits = [], {}
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        pass
+    for line in lines:
+        if line.strip() and not line.startswith("#"):
+            c, name, v = line.split()
+            limits[(c, name)] = float(v)
+
+    print(f"{'workload':18s} {'ratchet':>9s} {'now':>9s}")
+    over = False
+    for name, (_, cyc, _) in res.items():
+        now = round(cyc, 1)
+        lim = limits.get((cpu, name))
+        if lim is None:
+            note = "new" if update else "NOT IN RATCHET"
+            over |= not update
+            if update:
+                limits[(cpu, name)] = now
+        elif now > lim:
+            note = f"OVER by {now - lim:.1f}"
+            over = True
+        elif now < lim:
+            note = f"under by {lim - now:.1f}" + (", lowered" if update else "")
+            if update:
+                limits[(cpu, name)] = now
+        else:
+            note = ""
+        print(f"{name:18s} {'-' if lim is None else f'{lim:9.1f}':>9s} {now:9.1f}  {note}")
+
+    if update:
+        head = [x for x in lines if not x.strip() or x.startswith("#")]
+        cpus = sorted({c for c, _ in limits}, key=lambda c: (c != "m0", c))
+        body = []
+        for c in cpus:
+            names = [n for (cc, n) in limits if cc == c]
+            if c == cpu:  # this run's order, then any it no longer has
+                names = [n for n in res if (c, n) in limits] + [n for n in names if n not in res]
+            body += [f"{c} {n:18s} {limits[(c, n)]:9.1f}" for n in names]
+        with open(path, "w") as f:
+            f.write("\n".join(head + body) + "\n")
+    if over:
+        print(f"# *** over {path}: a regression, or a deliberate change that raises it ***")
+    return 1 if over else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--cpu", choices=["m0", "m4"])
@@ -382,6 +507,8 @@ def main():
     ap.add_argument("--n", type=int, default=256, help="inputs per workload")
     ap.add_argument("--filter", default="")
     ap.add_argument("--dump", action="store_true", help="print the parse corpora")
+    ap.add_argument("--ratchet", metavar="FILE", help="hold NEW.elf to FILE's cycle counts")
+    ap.add_argument("--update", action="store_true", help="with --ratchet, lower FILE")
     ap.add_argument("elfs", nargs="*", metavar="ELF")
     a = ap.parse_args()
 
@@ -389,7 +516,15 @@ def main():
         for name, seed, f in PARSE_SETS:
             for s in gen(seed, f, 1024):
                 print(f"parse/{name}\t{s}")
+        for name, seed, f in OTHER_SETS:
+            for s in gen(seed, f, 1024):
+                print(f"{name}\t{s}")
         return 0
+    if a.ratchet:
+        if not a.cpu or not a.objdump or len(a.elfs) != 1:
+            ap.error("--ratchet needs --cpu, --objdump and NEW.elf")
+        return ratchet(a.ratchet, a.cpu, run(Machine(a.elfs[0], a.objdump, a.cpu), a.n, a.filter),
+                       a.update)
     if not a.cpu or not a.objdump or len(a.elfs) != 2:
         ap.error("--cpu, --objdump, BASE.elf and NEW.elf are required")
 
@@ -398,8 +533,11 @@ def main():
     print(f"{'workload':18s} {'base insn':>9s} {'new insn':>9s} {'base cyc':>9s} "
           f"{'new cyc':>9s}  {'x':>5s}")
     bad = False
-    for k, (bi, bc, bk) in base.items():
-        ni, nc, nk = new[k]
+    for k, (ni, nc, nk) in new.items():
+        if k not in base:  # the baseline predates it
+            print(f"{k:18s} {'-':>9s} {ni:9.1f} {'-':>9s} {nc:9.1f}  {'new':>5s}")
+            continue
+        bi, bc, bk = base[k]
         bad |= bk != nk
         print(f"{k:18s} {bi:9.1f} {ni:9.1f} {bc:9.1f} {nc:9.1f}  {bc / nc:4.2f}x"
               f"{'' if bk == nk else '  CHECKSUM-MISMATCH'}")

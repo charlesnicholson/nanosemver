@@ -1,0 +1,42 @@
+# Cortex-M -Os cycles per call, workload by workload, from bench/cm/cmcount.py's
+# emulator, where counts are exact. `make ratchet` fails if any takes more; `make
+# ratchet-update` lowers each to what it now takes, and never raises one: that is a
+# deliberate edit, with its reason in the commit. A toolchain bump moves these too.
+m0 parse/core             227.0
+m0 parse/pre              400.9
+m0 parse/build            486.1
+m0 parse/full             649.3
+m0 parse/long            1084.5
+m0 parse/mix              273.7
+m0 parse/invalid          194.1
+m0 cmp/random              24.3
+m0 cmp/pre-random         168.6
+m0 cmp/equal-full         157.4
+m0 cmp/equal-long         286.7
+m0 prefix/mix             461.3
+m0 range/mix              900.7
+m0 range/mix-excl         900.7
+m0 range/or4             4605.9
+m0 format/mix             322.3
+m0 format/long            817.6
+m0 format-len/mix          92.2
+m0 copy/mix               183.7
+m4 parse/core             238.6
+m4 parse/pre              414.3
+m4 parse/build            509.4
+m4 parse/full             669.3
+m4 parse/long            1156.9
+m4 parse/mix              285.8
+m4 parse/invalid          202.3
+m4 cmp/random              26.3
+m4 cmp/pre-random         152.0
+m4 cmp/equal-full         163.7
+m4 cmp/equal-long         317.7
+m4 prefix/mix             486.1
+m4 range/mix              933.4
+m4 range/mix-excl         933.3
+m4 range/or4             4747.0
+m4 format/mix             239.8
+m4 format/long            590.1
+m4 format-len/mix         102.9
+m4 copy/mix               149.1

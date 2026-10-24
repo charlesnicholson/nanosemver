@@ -14,6 +14,13 @@
 extern "C" {
 #endif
 
+/* This header's release, stamped from its tag: v1.4.0-rc.2 gives 1, 4, 0 and
+   "1.4.0-rc.2". An unreleased checkout is 0.0.0. */
+#define NSV_VERSION_MAJOR 0
+#define NSV_VERSION_MINOR 0
+#define NSV_VERSION_PATCH 0
+#define NSV_VERSION "0.0.0"
+
 /* All functions return int: >= 0 is success (often a length), < 0 is one of these.
    OVERFLOW and TOO_LONG from nsv_parse mean valid semver beyond nanosemver's limits;
    SYNTAX takes precedence over both. */
@@ -64,11 +71,51 @@ typedef struct nsv_semver {
    Returns NSV_RET_OK, or ERR_ARG / ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG. */
 int nsv_parse(nsv_semver_t *out, char const *s, size_t len);
 
+/* Parses the version at the start of s[0, len), in the manner of from_chars: the longest
+   prefix that is a semver 2.0.0 string, whose length goes in *consumed. What follows is
+   the caller's to check: "1.2.3, 2.0.0" gives 1.2.3, and so does "1.2.3.4", and "1.2.03"
+   gives 1.2.0. *consumed is 0 on ERR_SYNTAX, where no prefix is a version, and on
+   ERR_OVERFLOW and ERR_TOO_LONG it spans the version that does not fit. *out is unmodified
+   on error. Returns as nsv_parse does. */
+int nsv_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed);
+
 /* Compares by semver precedence. Build metadata is ignored, so NSV_CMP_EQ does not mean
    identical. Returns NSV_CMP_LT / NSV_CMP_EQ / NSV_CMP_GT, or ERR_ARG.
    qsort comparator: return nsv_cmp(a, b) - 1; valid for arrays of views. To sort copies,
    sort an array of pointers to them. */
 int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b);
+
+/* nsv_range_match flags. */
+enum {
+  /* npm's default: a version with a pre-release satisfies a comparator set only if a
+     comparator in it has a pre-release on the same MAJOR.MINOR.PATCH. So >=1.0.0 <2.0.0
+     rejects 1.5.0-beta, and >=1.5.0-beta <2.0.0 admits 1.5.0-rc.1 but not 1.6.0-rc.1. */
+  NSV_RANGE_EXCLUDE_PRE = 1,
+};
+
+/* Whether v satisfies the range in s[0, len), e.g. ">=1.2.0 <1.4.0 || ^2.1.0". No
+   standard defines ranges; this grammar is a subset of npm's
+   (https://github.com/npm/node-semver#range-grammar), and npm reads every range it
+   accepts the same way:
+     range       comparator sets separated by "||": v satisfies any one of them
+     set         comparators separated by spaces or tabs: v satisfies all of them
+     comparator  an operator, optional spaces, and a full semver 2.0.0 version V
+       <V <=V >V >=V   by nsv_cmp precedence
+       V =V            equal precedence, so build metadata never matters
+       ~V              >=V, with the same MAJOR.MINOR: ~1.2.3 is >=1.2.3 <1.3.0-0
+       ^V              >=V, with the same leftmost nonzero of MAJOR.MINOR.PATCH:
+                       ^1.2.3 is >=1.2.3 <2.0.0-0, ^0.2.3 is >=0.2.3 <0.3.0-0, and
+                       ^0.0.3 is >=0.0.3 <0.0.4-0
+   No partial versions (1.2, 1.x, *), hyphen ranges, leading 'v', or other grammars'
+   operators (==, !=, ~>, ~=); an empty range is a syntax error.
+   By default a pre-release is just a version ranking below its release, as with npm's
+   includePrerelease, so >=1.0.0 <2.0.0 admits 2.0.0-rc.1: write <2.0.0-0 to stop below
+   every 2.0.0 pre-release, as ^ and ~ do. NSV_RANGE_EXCLUDE_PRE is npm's default, but for
+   npm reading >=0.0.0 (and ^0.0.0's and ~0.0.0's lower bound) as *.
+   Returns 1 if v satisfies the range and 0 if not, or ERR_ARG / ERR_SYNTAX, or
+   ERR_OVERFLOW / ERR_TOO_LONG if a version in the range is beyond nanosemver's limits.
+   The whole range is always parsed, so a malformed one is ERR_SYNTAX however v compares. */
+int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags);
 
 /* Deep-copies s (view, literal, or copy) into dst as a self-contained, relocatable blob:
    the header followed by NUL-terminated pre-release and build strings. The blob may be

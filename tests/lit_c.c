@@ -1,5 +1,5 @@
-/* Compiled as C99: the header, NSV_SEMVER_LIT, and the documented qsort wrapper all
-   have to work from C, not just from the C++ tests. */
+/* Compiled as C99: the header, NSV_SEMVER_LIT, the documented qsort wrapper, ranges,
+   prefixes and the version macros all have to work from C, not just from the C++ tests. */
 #include "lit_c.h"
 
 #include <stdlib.h>
@@ -48,4 +48,26 @@ int lit_c_static_copy(char *out, size_t n) {
     return rc;
   }
   return nsv_format(out, n, &g_ver.v);
+}
+
+int lit_c_range_check(void) {
+  static char const range[] = ">=1.2.0 <1.4.0 || ^2.1.0";
+  static char const text[] = "1.3.0-rc.1, and so on";
+  static char const version[] = NSV_VERSION;
+  nsv_semver_t v;
+  size_t n = 0;
+  if ((nsv_parse_prefix(&v, text, sizeof(text) - 1, &n) != NSV_RET_OK) || (n != 10)) {
+    return 0;
+  }
+  if ((nsv_range_match(range, sizeof(range) - 1, &v, 0) != 1) ||
+      (nsv_range_match(range, sizeof(range) - 1, &v, NSV_RANGE_EXCLUDE_PRE) != 0) ||
+      (nsv_range_match(range, sizeof(range) - 1, &k_full, 0) != 1) ||
+      (nsv_range_match(range, sizeof(range) - 1, &k_bare, 0) != 0)) {
+    return 0;
+  }
+  if (nsv_parse(&v, version, sizeof(version) - 1) != NSV_RET_OK) {
+    return 0;
+  }
+  return (v.major == NSV_VERSION_MAJOR) && (v.minor == NSV_VERSION_MINOR) &&
+         (v.patch == NSV_VERSION_PATCH);
 }

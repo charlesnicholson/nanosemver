@@ -68,3 +68,7 @@ TEST_CASE("C: copy into a static wrapper struct") {
   REQUIRE(lit_c_static_copy(buf, sizeof(buf)) == 19);
   REQUIRE(std::string(buf) == "1.4.0-rc.2+g3f9a1c2");
 }
+
+TEST_CASE("C: ranges, prefixes and the version macros") {
+  REQUIRE(lit_c_range_check() == 1);
+}

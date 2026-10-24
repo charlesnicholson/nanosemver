@@ -39,12 +39,17 @@ jobs:
         run: ./release.sh --check
       - name: Dry run
         run: |
-          test "$(./release.sh v0.0.0-ci.1 build/release)" = prerelease
-          head -1 build/release/nanosemver.h | grep -q '^/\* nanosemver v0.0.0-ci.1:'
-          unzip -l build/release/nanosemver-v0.0.0-ci.1.zip
-          unzip -p build/release/nanosemver-v0.0.0-ci.1.zip nanosemver-v0.0.0-ci.1/nanosemver.h \
+          test "$(./release.sh v12.34.56-ci.7 build/release)" = prerelease
+          head -1 build/release/nanosemver.h | grep -q '^/\* nanosemver v12.34.56-ci.7:'
+          printf '%s\n' '#include "nanosemver.h"' \
+            '#if NSV_VERSION_MAJOR != 12 || NSV_VERSION_MINOR != 34 || NSV_VERSION_PATCH != 56' \
+            '#error the version macros are not stamped' '#endif' > build/release/stamp.c
+          cc -std=c99 -Wall -Werror -c build/release/stamp.c -o /dev/null
+          grep -qx '#define NSV_VERSION "12.34.56-ci.7"' build/release/nanosemver.h
+          unzip -l build/release/nanosemver-v12.34.56-ci.7.zip
+          unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.h \
             | cmp - build/release/nanosemver.h
-          unzip -l build/release/nanosemver-v0.0.0-ci.1.zip | grep -q 'tests/test_parse.cc'
+          unzip -l build/release/nanosemver-v12.34.56-ci.7.zip | grep -q 'tests/test_parse.cc'
           cat build/release/release_notes.md
 
   linux:
@@ -217,9 +222,10 @@ jobs:
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvars${{ matrix.arch }}.bat" || exit /b 1
           call build.bat fuzz
 
-  # Cortex-M code size against size-budget.mk, then the benchmarks against main: the
-  # emulated Cortex-M instruction counts are exact, the host timings a shared runner's.
-  # Neither benchmark gates: a deliberate behavior change makes their checksums differ.
+  # The ratchet, Cortex-M code size and cycles per call held to size-budget.mk and
+  # bench/cm/ratchet.txt: emulated counts are exact, so it gates. Then the benchmarks
+  # against main, which do not: the host timings are a shared runner's, and a deliberate
+  # behavior change makes their checksums differ.
   embedded:
     runs-on: ubuntu-latest
     container:
@@ -239,8 +245,8 @@ jobs:
           key: embedded-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua', 'bench/cm/cmcount.py') }}
       - name: Code size
         run: make size
-      - name: Size budget, and nothing from libc or libgcc but memcpy
-        run: make size-check
+      - name: The ratchet, and nothing from libc or libgcc but memcpy
+        run: make ratchet
       # checkout trusts the workspace only for its own git calls; the container's user
       # does not own it, so `git show origin/main:...` needs the exception too.
       - name: Trust the checkout
@@ -256,6 +262,24 @@ jobs:
         shell: bash
         run: |
           { echo '### Host, gcc -O2'; echo '```'; make -s bench CC=gcc CXX=g++ BENCH_ARGS=--quick; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # nsv_range_match against npm's own semver package. No standard defines ranges; npm's
+  # grammar is the nearest thing, and nanosemver's is a subset of it.
+  npm:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: build/envy-cache
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua', 'envy/local.node.lua') }}
+      - name: Against node-semver
+        run: make npm-check NPM_ARGS="1000000 1"
 
   # The DOCTEST_H opt-out: no container, no envy, the runner's own compilers.
   without-envy:
@@ -278,7 +302,7 @@ jobs:
   # checks that this list names every job.
   all-checks-pass:
     needs: [ lint, linux, linux-arm64, sanitizers, coverage, fuzz, macos, windows,
-             embedded, without-envy ]
+             embedded, npm, without-envy ]
     if: always()
     runs-on: ubuntu-latest
     steps:

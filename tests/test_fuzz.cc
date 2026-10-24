@@ -35,6 +35,14 @@ TEST_CASE("fuzz: every corpus string, and every pair of them") {
   }
 }
 
+TEST_CASE("fuzz: every corpus range against every corpus version") {
+  for (char const *r : corpus::k_ranges) {
+    for (char const *v : corpus::k_valid) {
+      run(std::string(r) + "\n" + v);
+    }
+  }
+}
+
 TEST_CASE("fuzz: generated inputs") {
   nsv_fuzz::rng r(20261023);
   for (int i = 0; i < 100000; ++i) {

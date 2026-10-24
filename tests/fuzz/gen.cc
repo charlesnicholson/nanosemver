@@ -1,5 +1,6 @@
 #include "gen.h"
 
+#include <iterator>
 #include <vector>
 
 namespace nsv_fuzz {
@@ -168,6 +169,93 @@ std::string near_length_limit(rng &r) {
   return s;
 }
 
+// n + delta for a small decimal string, else n unchanged.
+std::string bump(std::string const &n, int delta) {
+  if (n.empty() || (n.size() > 9) || (n.find_first_not_of("0123456789") != std::string::npos)) {
+    return n;
+  }
+  long long const v = std::stoll(n) + delta;
+  return (v < 0) ? n : std::to_string(v);
+}
+
+// A comparator's version: v itself, v's neighbours and zeros, or anything at all.
+std::string near_version(rng &r, parts const &v) {
+  switch (r.below(8)) {
+    case 0: return gen_version(r);
+    case 1: return v.str();
+    default: {
+      parts p = r.chance(50) ? v : tweak(r, v);
+      p.has_pre = p.has_pre && r.chance(50);  // most bounds are releases
+      for (std::string *f : { &p.major, &p.minor, &p.patch }) {
+        switch (r.below(6)) {
+          case 0: *f = "0"; break;
+          case 1: *f = bump(*f, 1); break;
+          case 2: *f = bump(*f, -1); break;
+          default: break;
+        }
+      }
+      return p.str();
+    }
+  }
+}
+
+// A version for a range to rank: small numbers, so ^0.x and the bounds come up often.
+parts range_parts(rng &r) {
+  static char const *const pres[] = { "0", "1", "2", "alpha", "beta", "rc", "rc.1", "0.0" };
+  parts p;
+  for (std::string *f : { &p.major, &p.minor, &p.patch }) {
+    *f = r.chance(85) ? std::to_string(r.below(4)) : number(r);
+  }
+  p.has_pre = r.chance(40);
+  if (p.has_pre) {
+    p.pre.push_back(r.chance(80) ? pres[r.below(8)] : pre_ident(r));
+  }
+  p.has_build = r.chance(10);
+  if (p.has_build) {
+    p.build.push_back(build_ident(r));
+  }
+  return p;
+}
+
+// A range around v: mostly npm's grammar, sometimes with operators, separators and
+// spacing from other grammars or from nowhere.
+std::string gen_range(rng &r, parts const &v) {
+  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~" };
+  static char const *const bad_ops[] = { "==", "!=", "=>", "~>", "~=", "^=", "<<", "v", "*",
+                                         "-", "!", "|" };
+  static char const *const gaps[] = { " ", "  ", "\t" };
+  static char const *const ands[] = { " ", "  ", "\t", " \t " };
+  static char const *const bad_ands[] = { "", ",", ", ", "\v", "&&", " - " };
+  static char const *const ors[] = { "||", " || ", "  ||  ", " ||", "|| " };
+  static char const *const bad_ors[] = { "|", " | ", "|||", " or ", "|| ||" };
+  auto any = [&r](auto const &a) { return a[r.below(static_cast<std::uint32_t>(std::size(a)))]; };
+  auto mostly = [&r, &any](auto const &good, auto const &bad) {
+    return r.chance(95) ? any(good) : any(bad);
+  };
+
+  std::string s = r.chance(10) ? any(gaps) : "";
+  for (std::uint32_t i = 0, sets = 1 + r.below(3); i < sets; ++i) {
+    if (i) {
+      s += mostly(ors, bad_ors);
+    }
+    for (std::uint32_t j = 0, n = 1 + r.below(3); j < n; ++j) {
+      if (j) {
+        s += mostly(ands, bad_ands);
+      }
+      s += mostly(ops, bad_ops);
+      s += r.chance(10) ? any(gaps) : "";
+      s += near_version(r, v);
+    }
+  }
+  if (r.chance(10)) {
+    s += any(gaps);
+  }
+  if (r.chance(5)) {
+    mutate(r, s);
+  }
+  return s;
+}
+
 }  // namespace
 
 std::string gen_version(rng &r) {
@@ -182,12 +270,17 @@ std::string gen_version(rng &r) {
 }
 
 std::string gen_input(rng &r) {
-  switch (r.below(4)) {
+  switch (r.below(6)) {
     case 0: return gen_version(r);
     case 1: return gen_version(r) + "\n" + gen_version(r);
-    default: {
+    case 2:
+    case 3: {
       parts const a = gen_parts(r);
       return a.str() + "\n" + tweak(r, a).str();
+    }
+    default: {
+      parts const v = range_parts(r);
+      return gen_range(r, v) + "\n" + v.str();
     }
   }
 }
