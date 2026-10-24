@@ -1,12 +1,21 @@
+/* nanosemver @NSV_VERSION@: nsv::SemVer, a C++ version that owns its strings, over
+   nanosemver.h. https://github.com/charlesnicholson/nanosemver
+   charles.nicholson+nanosemver@gmail.com
+   dual-licensed under 0bsd and unlicense, take your pick. see LICENSE for details. */
 /* SPDX-License-Identifier: Unlicense OR 0BSD */
-/* nanosemver.hpp: nsv::SemVer, a C++ version that owns its strings. Header-only on top
-   of nanosemver.h; link nanosemver.c, built as C. C++11 or later, and needs no
-   exceptions, RTTI or standard library. */
+/* Header-only on top of nanosemver.h; link nanosemver.c, built as C. C++11 or later, and
+   needs no exceptions, RTTI or standard library. */
 
 #ifndef NANOSEMVER_HPP
 #define NANOSEMVER_HPP
 
 #include "nanosemver.h"
+
+/* release.sh stamps this with the release, as it does nanosemver.h's NSV_VERSION_*, so a
+   nanosemver.hpp only builds against the nanosemver.h it shipped with. */
+#if (NSV_VERSION_MAJOR != 0) || (NSV_VERSION_MINOR != 0) || (NSV_VERSION_PATCH != 0)
+#error "nanosemver.hpp and nanosemver.h are from different releases"
+#endif
 
 namespace nsv {
 

@@ -378,13 +378,14 @@ with their reasons in `tests/mutate-equivalent.txt`.
 
 Push a tag like `v1.2.0` (or `v1.2.0-rc.1`, published as a pre-release). CI runs the
 whole matrix against it and, only if everything passes, `release.sh` stamps the tag
-into `nanosemver.h` and publishes it as a GitHub release, alongside `nanosemver.c`,
-`nanosemver.hpp` and a zip of the full source carrying the same stamped header. The stamp
-is the first line, and `NSV_VERSION_MAJOR`, `NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and
-the string `NSV_VERSION` (`"1.2.0-rc.1"`), for code that reports or checks which
-nanosemver it has. The checked-in header keeps its `@NSV_VERSION@` placeholder and 0.0.0,
-so no commit ever bumps a version. `./release.sh v1.2.0` shows locally what a tag would
-ship.
+into `nanosemver.h` and `nanosemver.hpp` and publishes them as a GitHub release, alongside
+`nanosemver.c` and a zip of the full source carrying the same stamped headers. The stamp
+is the first line of each, and in `nanosemver.h`, `NSV_VERSION_MAJOR`,
+`NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and the string `NSV_VERSION` (`"1.2.0-rc.1"`),
+for code that reports or checks which nanosemver it has; a stamped `nanosemver.hpp`
+refuses to build against any other release's `nanosemver.h`. The checked-in headers keep
+their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever bumps a version.
+`./release.sh v1.2.0` shows locally what a tag would ship.
 
 ## License
 

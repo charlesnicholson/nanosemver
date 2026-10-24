@@ -46,12 +46,18 @@ jobs:
             '#error the version macros are not stamped' '#endif' > build/release/stamp.c
           cc -std=c99 -Wall -Werror -c build/release/stamp.c -o /dev/null
           grep -qx '#define NSV_VERSION "12.34.56-ci.7"' build/release/nanosemver.h
-          cmp build/release/nanosemver.hpp nanosemver.hpp
+          head -1 build/release/nanosemver.hpp | grep -q '^/\* nanosemver v12.34.56-ci.7:'
           printf '%s\n' '#include "nanosemver.hpp"' > build/release/stamp.cc
           c++ -std=c++11 -Wall -Werror -fno-exceptions -fno-rtti -c build/release/stamp.cc -o /dev/null
+          # A stamped nanosemver.hpp refuses another release's nanosemver.h.
+          mkdir -p build/release/mixed
+          cp nanosemver.h build/release/nanosemver.hpp build/release/stamp.cc build/release/mixed/
+          ! c++ -std=c++11 -c build/release/mixed/stamp.cc -o /dev/null 2>/dev/null
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip
           unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.h \
             | cmp - build/release/nanosemver.h
+          unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.hpp \
+            | cmp - build/release/nanosemver.hpp
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip | grep -q 'tests/test_parse.cc'
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip | grep -q 'nanosemver.hpp'
           cat build/release/release_notes.md
