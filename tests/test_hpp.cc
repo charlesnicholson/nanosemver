@@ -30,8 +30,8 @@ static_assert(std::is_nothrow_move_assignable<SemVer>::value, "");
 static_assert(std::is_nothrow_destructible<SemVer>::value, "");
 static_assert(!std::is_nothrow_copy_constructible<SemVer>::value, "a copy allocates");
 static_assert(!std::is_nothrow_copy_assignable<SemVer>::value, "a copy allocates");
-static_assert(std::is_constructible<SemVer, nsv_semver_t const &>::value, "");
-static_assert(!std::is_convertible<nsv_semver_t const &, SemVer>::value, "explicit");
+static_assert(!std::is_constructible<SemVer, nsv_semver_t const &>::value, "only from()");
+static_assert(!std::is_convertible<nsv_semver_t const &, SemVer>::value, "only from()");
 static_assert(!noexcept(std::declval<SemVer &>().parse("", 0)), "parsing allocates");
 static_assert(!noexcept(std::declval<SemVer &>().assign(nsv_semver_t{})), "so does this");
 static_assert(noexcept(std::declval<SemVer const &>().matches("", 0)), "");
@@ -63,6 +63,22 @@ SemVer ver(std::string const &s) {
 
 // The header of every version without a blob.
 nsv_semver_t const *zero_header() { return &SemVer().semver(); }
+
+// SemVer::from(c), which has to succeed.
+SemVer from_ok(nsv_semver_t const &c) {
+  int rc = 1;
+  SemVer v = SemVer::from(c, rc);
+  REQUIRE(rc == NSV_RET_OK);
+  return v;
+}
+
+// SemVer::from(c), which nsv_copy refuses: 0.0.0, with no blob.
+void from_refused(nsv_semver_t const &c) {
+  int rc = 1;
+  SemVer const v = SemVer::from(c, rc);
+  REQUIRE(rc == NSV_RET_ERR_TOO_LONG);
+  REQUIRE(&v.semver() == zero_header());
+}
 
 // Places s and its NUL so the NUL is the last byte before a guard page.
 char const *place_nul(nsv_test::guarded &g, std::string const &s) {
@@ -292,7 +308,7 @@ TEST_CASE("nsv::SemVer: a copy outlives the string it was parsed from") {
   nsv_semver_t view{};
   REQUIRE(nsv_parse(&view, buf, s.size()) == NSV_RET_OK);
   REQUIRE(d.assign(view) == NSV_RET_OK);
-  SemVer e(view);
+  SemVer e = from_ok(view);
   scrap(buf);
 
   for (SemVer const *v : { &a, &b, &c, &d, &e }) {
@@ -306,7 +322,7 @@ TEST_CASE("nsv::SemVer: from an nsv_semver_t") {
   SUBCASE("a view") {
     std::string const s = "1.2.3-rc.1+b.2";
     nsv_semver_t const view = parse_ok(s);
-    SemVer const v(view);
+    SemVer const v = from_ok(view);
     same(v, view);
     SemVer w;
     REQUIRE(w.assign(view) == NSV_RET_OK);
@@ -316,7 +332,7 @@ TEST_CASE("nsv::SemVer: from an nsv_semver_t") {
   SUBCASE("a copy, freed after") {
     std::string const s = "4.5.6-rc.7+meta.8";
     nsv_test::blob blob = nsv_test::copy(parse_ok(s));
-    SemVer const v(*blob);
+    SemVer const v = from_ok(*blob);
     SemVer w;
     REQUIRE(w.assign(*blob) == NSV_RET_OK);
     std::memset(static_cast<void *>(blob.get()), 0xEE, sizeof(nsv_semver_t));
@@ -328,22 +344,22 @@ TEST_CASE("nsv::SemVer: from an nsv_semver_t") {
   SUBCASE("literals") {
     static nsv_semver_t const full = NSV_SEMVER_LIT(1, 4, 0, "rc.2", "g3f9a1c2");
     static nsv_semver_t const bare = NSV_SEMVER_LIT(5, 6, 7, "", "");
-    SemVer const v(full);
+    SemVer const v = from_ok(full);
     same(v, full);
     REQUIRE(str(v) == "1.4.0-rc.2+g3f9a1c2");
     REQUIRE(std::string(v.pre()) == "rc.2");
     REQUIRE(std::string(v.build()) == "g3f9a1c2");
-    SemVer const w(bare);
+    SemVer const w = from_ok(bare);
     same(w, bare);
     REQUIRE(str(w) == "5.6.7");
   }
 
   SUBCASE("another version, and zero") {
     SemVer const v = ver("7.8.9-a.b+c");
-    SemVer const w(v.semver());
+    SemVer const w = from_ok(v.semver());
     same(w, v.semver());
     REQUIRE(&w.semver() != &v.semver());
-    SemVer const z(nsv_semver_t{});
+    SemVer const z = from_ok(nsv_semver_t{});
     same(z, nsv_semver_t{});
     REQUIRE(z == SemVer());
   }
@@ -356,8 +372,7 @@ TEST_CASE("nsv::SemVer: what nsv_copy refuses") {
     big.src = pre.data();
     big.pre_len = 65535;
     REQUIRE(nsv_copy(nullptr, 0, &big) == NSV_RET_ERR_TOO_LONG);
-    SemVer const v(big);
-    REQUIRE(&v.semver() == zero_header());
+    from_refused(big);
     fails_unchanged(NSV_RET_ERR_TOO_LONG, [&](SemVer &w) { return w.assign(big); });
   }
 
@@ -367,12 +382,11 @@ TEST_CASE("nsv::SemVer: what nsv_copy refuses") {
     big.src = pre.data();
     big.pre_len = 65534;
     if (nsv_test::fits_int(sizeof(nsv_semver_t) + 65534 + 2)) {
-      SemVer const v(big);
+      SemVer const v = from_ok(big);
       REQUIRE(std::string(v.pre()) == pre);
       REQUIRE(*v.build() == '\0');
     } else {
-      SemVer const v(big);
-      REQUIRE(&v.semver() == zero_header());
+      from_refused(big);
       fails_unchanged(NSV_RET_ERR_TOO_LONG, [&](SemVer &w) { return w.assign(big); });
     }
   }
@@ -383,7 +397,7 @@ TEST_CASE("nsv::SemVer: what nsv_copy refuses") {
     nsv_semver_t const view = parse_ok(s);
     size_t n = 0;
     if (nsv_test::fits_int(sizeof(nsv_semver_t) + 30000 + 35528 + 2)) {
-      SemVer v(view);
+      SemVer v = from_ok(view);
       REQUIRE(str(v) == s);
       REQUIRE(v.parse(s.data(), s.size()) == NSV_RET_OK);
       REQUIRE(str(v) == s);
@@ -392,8 +406,7 @@ TEST_CASE("nsv::SemVer: what nsv_copy refuses") {
       REQUIRE(str(v) == s);
     } else {
       // nsv_parse accepts it, but its copy is longer than INT_MAX bytes.
-      SemVer const v(view);
-      REQUIRE(&v.semver() == zero_header());
+      from_refused(view);
       fails_unchanged(NSV_RET_ERR_TOO_LONG, [&](SemVer &w) { return w.assign(view); });
       fails_unchanged(NSV_RET_ERR_TOO_LONG,
                       [&](SemVer &w) { return w.parse(s.data(), s.size()); });
@@ -763,5 +776,5 @@ TEST_CASE("nsv::SemVer: semver() for the C API") {
   REQUIRE(nsv_range_match("^1.2.3-rc.0", 11, &c, NSV_RANGE_EXCLUDE_PRE) == 1);
   nsv_test::blob const blob = nsv_test::copy(c);
   REQUIRE(nsv_test::format(*blob) == s);
-  REQUIRE(SemVer(*blob) == v);
+  REQUIRE(from_ok(*blob) == v);
 }

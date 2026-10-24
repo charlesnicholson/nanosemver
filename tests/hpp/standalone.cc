@@ -10,7 +10,9 @@ int nsv_hpp_standalone(char const *s, size_t len) {
   nsv::SemVer a;
   size_t consumed = 0;
   int r = a.parse(s, len) + a.parse(s) + a.parse_prefix(s, len, consumed);
-  nsv::SemVer b(a.semver());
+  int rc = 0;
+  nsv::SemVer b = nsv::SemVer::from(a.semver(), rc);
+  r += rc;
   r += b.assign(a.semver());
   nsv::SemVer c(b);
   c = a;

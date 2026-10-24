@@ -115,9 +115,10 @@ char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
 
 - `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
   does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
-  `nsv_semver_t`, a view, copy or literal, and so does the constructor `nsv::SemVer(c)`,
-  which leaves `0.0.0` where `assign` would return an error. (`NSV_SEMVER_LIT` itself
-  needs C++20 in C++, for its designated initializers.)
+  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer::from(c, rc)` makes a new
+  version of one, its error in `rc`; there is no constructor from one, since a
+  constructor could not report that error. (`NSV_SEMVER_LIT` itself needs C++20 in C++,
+  for its designated initializers.)
 - `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, so `==` ignores build
   metadata: `1.0.0+a == 1.0.0+b`.
 - `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
