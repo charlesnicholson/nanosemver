@@ -100,8 +100,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Ranges come from about a third of the generator's inputs.
-  while (emitted < generated) {
+  // Ranges come from about a third of the generator's inputs; generated-count of them on
+  // top of the cases above.
+  for (unsigned long const fixed = emitted; (emitted - fixed) < generated;) {
     std::string const in = nsv_fuzz::gen_input(r);
     size_t const nl = in.find('\n');
     if (nl != std::string::npos) {

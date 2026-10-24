@@ -13,7 +13,9 @@ that no longer matches anything is reported as stale. Any survivor or stale entr
   tests/mutate.py BUILD-DIR [--jobs N] [--shard K/N] [--filter SUBSTR] [--list]
 
 BUILD-DIR is a `make` build directory whose test objects are up to date, e.g.
-build/cc-Release-64. CC and CXX come from the environment (cc / c++).
+build/cc-Release-64. CC, CXX and ARCH_FLAGS (-m32, say) come from the environment
+(cc / c++ / none). The unmutated source has to build against those objects and pass the
+tests before any mutant runs, or nothing a mutant does would mean anything.
 """
 
 import argparse
@@ -196,32 +198,46 @@ def load_equivalent():
     return out
 
 
+# Built into the same tree by `make fuzz`, with a main of its own.
+NOT_UNIT = {os.path.join("tests", "fuzz", "driver.cc.o")}
+
+
 def objects(build, int16):
     base = os.path.join(build, "int16") if int16 else build
     objs = []
     for d, _, files in os.walk(os.path.join(base, "tests")):
         if not int16 and os.sep + "int16" in d[len(build):]:
             continue
-        objs += [os.path.join(d, f) for f in files if f.endswith(".o")]
+        objs += [os.path.join(d, f) for f in files if f.endswith(".o")
+                 and os.path.relpath(os.path.join(d, f), base) not in NOT_UNIT]
     return sorted(objs)
+
+
+def build(args, text, workdir, int16):
+    """The unit tests' executable with text as nanosemver.c, or None and the error."""
+    cc = os.environ.get("CC", "cc")
+    cxx = os.environ.get("CXX", "c++")
+    arch = os.environ.get("ARCH_FLAGS", "").split()
+    src = os.path.join(workdir, "nanosemver.c")
+    obj = os.path.join(workdir, "m.o")
+    exe = os.path.join(workdir, "t")
+    with open(src, "w") as f:
+        f.write(text)
+    cflags = ["-std=c99", "-Os", "-w", "-I" + ROOT] + arch + (INT16 if int16 else [])
+    for cmd in ([cc] + cflags + ["-c", src, "-o", obj],
+                [cxx] + arch + args.objs[int16] + [obj, "-o", exe]):
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            return None, r.stderr
+    return exe, ""
 
 
 def run_one(args, mutant, workdir):
     line, desc, text = mutant
-    cc = os.environ.get("CC", "cc")
-    cxx = os.environ.get("CXX", "c++")
-    src = os.path.join(workdir, "nanosemver.c")
-    with open(src, "w") as f:
-        f.write(text)
     for int16 in (False, True):
-        obj = os.path.join(workdir, "m.o")
-        exe = os.path.join(workdir, "t")
-        cflags = ["-std=c99", "-Os", "-w", "-I" + ROOT] + (INT16 if int16 else [])
-        if subprocess.run([cc] + cflags + ["-c", src, "-o", obj], capture_output=True).returncode:
+        exe, _ = build(args, text, workdir, int16)
+        if not exe:
             return (line, desc, "compile")  # not a valid program: neither killed nor kept
-        if subprocess.run([cxx] + args.objs[int16] + [obj, "-o", exe],
-                          capture_output=True).returncode:
-            return (line, desc, "compile")
         # The quick tests first, which kill most mutants; the slow ones only for what
         # survives them. Either way every test runs before a mutant counts as surviving.
         for which in ("--test-case-exclude=" + SLOW, "--test-case=" + SLOW):
@@ -280,6 +296,18 @@ def main():
         for line, desc, _ in ms:
             print(f"{line}: {desc}")
         return 0
+
+    # Unless the unmutated source builds against these objects (no stray main, the same
+    # ARCH) and passes, every mutant would count as unbuildable or killed, and the run
+    # would pass having tested nothing.
+    with tempfile.TemporaryDirectory(prefix="nsv-mutate-") as d:
+        for int16 in (False, True):
+            exe, err = build(args, text, d, int16)
+            if not exe:
+                sys.exit(f"the unmutated nanosemver.c does not build against {args.build}'s "
+                         f"test objects{' (int16)' if int16 else ''}:\n{err}")
+        if run_one(args, (0, "unmutated", text), d)[2] != "SURVIVED":
+            sys.exit(f"the unit tests in {args.build} fail on the unmutated nanosemver.c")
 
     def one(m):
         with tempfile.TemporaryDirectory(prefix="nsv-mutate-") as d:

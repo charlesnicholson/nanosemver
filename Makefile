@@ -467,7 +467,7 @@ $(NPM_BUILD)/nanosemver.o: nanosemver.c nanosemver.h Makefile
 	$(Q)$(CC) -std=c99 $(WARN) $(WARN_C) -O2 -I. -c $< -o $@
 
 $(NPM_BUILD)/nsv_npm_emit: tests/npm/emit.cc tests/fuzz/gen.cc tests/fuzz/gen.h tests/corpus.h \
-		$(NPM_BUILD)/nanosemver.o Makefile
+		tests/range_cases.h $(NPM_BUILD)/nanosemver.o Makefile
 	$(MSG) LINK $@
 	$(Q)$(CXX) -std=c++20 $(WARN) $(WARN_CXX) -O2 -I. tests/npm/emit.cc tests/fuzz/gen.cc \
 		$(NPM_BUILD)/nanosemver.o -o $@
@@ -479,13 +479,14 @@ npm-check: $(NPM_BUILD)/nsv_npm_emit
 
 # --- mutation testing ---------------------------------------------------------------
 # One change at a time to nanosemver.c, each built against this configuration's test
-# objects, both ways. uv provides the Python.
+# objects, both ways, and for its ARCH. uv provides the Python.
 MUTATE_ARGS ?=
 mutate: $(BUILD)/nsv_unittests $(BUILD)/nsv_unittests_int16
 ifneq ($(SAN),)
 	$(error mutants link without the sanitizer runtime; build without SAN)
 endif
-	$(Q)CC="$(CC)" CXX="$(CXX)" $(UV) run --quiet tests/mutate.py $(BUILD) $(MUTATE_ARGS)
+	$(Q)CC="$(CC)" CXX="$(CXX)" ARCH_FLAGS="$(ARCH_FLAGS)" $(UV) run --quiet tests/mutate.py \
+		$(BUILD) $(MUTATE_ARGS)
 
 # Everything under build/ except the package caches: refetching them is not what
 # anyone means by `make clean`. `rm -rf build` for that.
