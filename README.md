@@ -247,8 +247,9 @@ Add `nanosemver.c` to your build. It calls nothing but `memcpy`. On cores withou
 divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linked in
 either: `NSV_SOFT_DIV` selects that, 1 by default on Cortex-M0/M0+/M1, AVR, MSP430 and
 RISC-V without M, 0 elsewhere; define it to override. Built with `-ffunction-sections`
-and linked with `--gc-sections`, a program pays only for the functions it calls: the
-range matching and prefix parsing are about a kilobyte of it on a Cortex-M0+.
+and linked with `--gc-sections`, a program pays only for the functions it calls: on a
+Cortex-M0+, range matching adds about 850 bytes to parsing and comparing, and prefix
+parsing shares the parser's code.
 
 ## Development
 

@@ -94,10 +94,12 @@ static NSV_INLINE char const *nsv_scan_ids(char const *p, char const *e, unsigne
   }
 }
 
-int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
-  char const *p, *e, *pre = NULL, *pre_e = NULL, *build = NULL, *build_e = NULL;
-  uint32_t num[3];
-  unsigned k, ovf = 0;
+/* nsv_parse, and with consumed nsv_parse_prefix: one pass over the longest prefix of s
+   with semver's syntax, which nsv_parse requires to be all of s. */
+static int nsv_parse_to(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
+  char const *p, *e, *q, *pre = NULL, *pre_e = NULL, *build = NULL, *build_e = NULL;
+  uint32_t num[3], *n;
+  unsigned ovf = 0;
 
   if (!out || !s) {
     return NSV_RET_ERR_ARG;
@@ -108,10 +110,10 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   /* MAJOR.MINOR.PATCH, each "0" or [1-9][0-9]*. A leading zero ends the number after
      the '0', so whatever follows fails the separator check. Overflow is noted, not
      returned: a syntax error later in the string takes precedence. */
-  for (k = 0; k < 3u; ++k) {
+  for (n = num;; ++p) {
     uint32_t x, d;
     if ((p == e) || ((x = (uint32_t)(unsigned char)*p - '0') >= 10u)) {
-      return NSV_RET_ERR_SYNTAX;
+      goto syntax;
     }
     ++p;
     if (x) {
@@ -124,28 +126,28 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
         ++p;
       }
     }
-    num[k] = x;
-    if (k < 2u) {
-      if ((p == e) || (*p != '.')) {
-        return NSV_RET_ERR_SYNTAX;
-      }
-      ++p;
+    *n++ = x;
+    if (n == (num + 3)) {
+      break;
+    }
+    if ((p == e) || (*p != '.')) {
+      goto syntax;
     }
   }
 
-  /* A scan that stops short leaves p before e, and anywhere but a '+' that fails. */
-  if ((p != e) && (*p == '-')) {
-    pre = ++p;
-    pre_e = p = nsv_scan_ids(p, e, 1);
-    if ((p != e) && (*p != '+')) {
-      return NSV_RET_ERR_SYNTAX;
-    }
+  /* A '-' or '+' with no identifier after it is not part of a prefix, and a scan that
+     stops short leaves p before e, which only nsv_parse_prefix accepts. */
+  if ((p != e) && (*p == '-') && ((q = nsv_scan_ids(p + 1, e, 1)) != p)) {
+    pre = p + 1;
+    pre_e = p = q;
   }
-  if ((p != e) && (*p == '+')) {
-    build = ++p;
-    build_e = p = nsv_scan_ids(p, e, 0);
+  if ((p != e) && (*p == '+') && ((q = nsv_scan_ids(p + 1, e, 0)) != p)) {
+    build = p + 1;
+    build_e = p = q;
   }
-  if (p != e) {
+  if (consumed) {
+    *consumed = (size_t)(p - s);
+  } else if (p != e) {
     return NSV_RET_ERR_SYNTAX;
   }
 
@@ -153,7 +155,7 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   if (ovf) {
     return NSV_RET_ERR_OVERFLOW;
   }
-  if (len > UINT16_MAX) {
+  if ((size_t)(p - s) > UINT16_MAX) {
     return NSV_RET_ERR_TOO_LONG;
   }
 
@@ -166,46 +168,20 @@ int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
   out->build_ofs = (uint16_t)(build ? (build - s) : 0);
   out->build_len = (uint16_t)(build_e - build);
   return NSV_RET_OK;
+
+syntax:
+  if (consumed) {
+    *consumed = 0;
+  }
+  return NSV_RET_ERR_SYNTAX;
 }
 
-/* The length of the longest prefix of [s, e) with semver's syntax, numbers of any size
-   and any length; 0 if there is none. A '-' or '+' with no identifier after it is not
-   part of it. */
-static size_t nsv_prefix_len(char const *s, char const *e) {
-  char const *p = s;
-  unsigned k;
-  for (k = 0; k < 3u; ++k) {
-    if ((p == e) || !nsv_is_digit(*p)) {
-      return 0;
-    }
-    if (*p++ != '0') {
-      while ((p != e) && nsv_is_digit(*p)) {
-        ++p;
-      }
-    }
-    if (k < 2u) {
-      if ((p == e) || (*p != '.')) {
-        return 0;
-      }
-      ++p;
-    }
-  }
-  if ((p != e) && (*p == '-')) {
-    p = nsv_scan_ids(p + 1, e, 1);
-  }
-  if ((p != e) && (*p == '+')) {
-    p = nsv_scan_ids(p + 1, e, 0);
-  }
-  return (size_t)(p - s);
+int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
+  return nsv_parse_to(out, s, len, NULL);
 }
 
-/* Two passes, so that nsv_parse keeps its single one to itself. */
 int nsv_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
-  if (!out || !s || !consumed) {
-    return NSV_RET_ERR_ARG;
-  }
-  *consumed = nsv_prefix_len(s, s + len);
-  return nsv_parse(out, s, *consumed);
+  return consumed ? nsv_parse_to(out, s, len, consumed) : NSV_RET_ERR_ARG;
 }
 
 static char const *nsv_base(nsv_semver_t const *s) {
@@ -362,13 +338,15 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
     ++p;
   }
 
-  if ((acc - 3u) < 2u) {
-    /* > and <=, whose bound is the next line: >1.2 is >=1.3, <=1.2 is <1.3. Past
-       UINT32_MAX nothing is above, everything below. */
+  if (acc == (NSV_BIT_LT | NSV_BIT_EQ)) { /* <=1.2 is not >1.2 */
+    h ^= NSV_BIT_LT | NSV_BIT_EQ | NSV_BIT_GT | NSV_HOW_NOT;
+  }
+  if ((h & 7u) == NSV_BIT_GT) {
+    /* >1.2 is >=1.3, the next line; past UINT32_MAX nothing is above it. */
     if (k && (((k == 1u) || !++c->minor) ? ++c->major : 1u)) {
       h ^= NSV_BIT_EQ;
     } else {
-      h = (h & ~7u) | ((acc & 1u) ? 7u : 0u);
+      h &= ~7u;
     }
   } else if (acc == NSV_BIT_EQ) { /* = and != take the whole line */
     h |= NSV_BIT_GT;
