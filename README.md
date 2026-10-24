@@ -94,7 +94,7 @@ and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` an
 ## C++
 
 `nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
-still built as C. Its `nsv::version` owns its own copy, one allocation holding the header
+still built as C. Its `nsv::SemVer` owns its own copy, one allocation holding the header
 and both strings, so it never dangles the way a view can. Errors come back without
 exceptions: whatever can fail returns an `NSV_RET_*` code and leaves the version as it
 was. It needs C++11 or later and nothing from the standard library, and builds without
@@ -103,7 +103,7 @@ exceptions or RTTI.
 ```cpp
 #include "nanosemver.hpp"
 
-nsv::version v, w;  // 0.0.0, allocating nothing
+nsv::SemVer v, w;  // 0.0.0, allocating nothing
 if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
 w.parse("1.4.0");
 bool const older = v < w;  // true: a pre-release ranks below its release
@@ -115,7 +115,7 @@ char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
 
 - `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
   does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
-  `nsv_semver_t`, a view, copy or literal, and so does the constructor `nsv::version(c)`,
+  `nsv_semver_t`, a view, copy or literal, and so does the constructor `nsv::SemVer(c)`,
   which leaves `0.0.0` where `assign` would return an error. (`NSV_SEMVER_LIT` itself
   needs C++20 in C++, for its designated initializers.)
 - `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, so `==` ignores build
@@ -363,7 +363,7 @@ repetition change nothing, a set of bounds admits an unbroken run of versions,
 `NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
 metadata on the version never matters.
 
-`tests/test_hpp.cc` holds `nsv::version` to the C API under it: every parse, prefix parse,
+`tests/test_hpp.cc` holds `nsv::SemVer` to the C API under it: every parse, prefix parse,
 comparison, range match and format against the C function's own answer, every error
 leaving the version as it was, and copies that outlive their source string.
 

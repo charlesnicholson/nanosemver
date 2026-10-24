@@ -7,15 +7,15 @@
 int nsv_hpp_standalone(char const *s, size_t len);
 
 int nsv_hpp_standalone(char const *s, size_t len) {
-  nsv::version a;
+  nsv::SemVer a;
   size_t consumed = 0;
   int r = a.parse(s, len) + a.parse(s) + a.parse_prefix(s, len, consumed);
-  nsv::version b(a.semver());
+  nsv::SemVer b(a.semver());
   r += b.assign(a.semver());
-  nsv::version c(b);
+  nsv::SemVer c(b);
   c = a;
-  nsv::version d(static_cast<nsv::version &&>(c));
-  d = static_cast<nsv::version &&>(b);
+  nsv::SemVer d(static_cast<nsv::SemVer &&>(c));
+  d = static_cast<nsv::SemVer &&>(b);
 
   char buf[32];
   r += d.format(buf, sizeof buf);

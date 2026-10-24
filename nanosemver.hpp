@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Unlicense OR 0BSD */
-/* nanosemver.hpp: nsv::version, a C++ version that owns its strings. Header-only on top
+/* nanosemver.hpp: nsv::SemVer, a C++ version that owns its strings. Header-only on top
    of nanosemver.h; link nanosemver.c, built as C. C++11 or later, and needs no
    exceptions, RTTI or standard library. */
 
@@ -17,30 +17,30 @@ namespace nsv {
    What can fail returns an NSV_RET_* code and leaves *this unmodified on error. Blobs come
    from ::operator new, so running out of memory is its failure, not an error code:
    std::bad_alloc, or without exceptions, the end of the program. */
-class version {
+class SemVer {
  public:
-  constexpr version() noexcept : p_(nullptr) {}
+  constexpr SemVer() noexcept : p_(nullptr) {}
 
   /* A copy of s: a view, literal, or copy. 0.0.0 if nsv_copy refuses s, which it does
      only for a 65535-byte pre-release (never one from nsv_parse) or, where int is 16 bits,
      a copy over INT_MAX bytes; assign reports that instead. */
-  explicit version(nsv_semver_t const &s) : p_(nullptr) { assign(s); }
+  explicit SemVer(nsv_semver_t const &s) : p_(nullptr) { assign(s); }
 
-  version(version const &o) : p_(nullptr) {
+  SemVer(SemVer const &o) : p_(nullptr) {
     if (o.p_) {
       assign(*o.p_);  // cannot fail: nsv_copy made it once, so it makes it again
     }
   }
-  version(version &&o) noexcept : p_(o.p_) { o.p_ = nullptr; }
-  version &operator=(version const &o) { return *this = version(o); }
-  version &operator=(version &&o) noexcept {
+  SemVer(SemVer &&o) noexcept : p_(o.p_) { o.p_ = nullptr; }
+  SemVer &operator=(SemVer const &o) { return *this = SemVer(o); }
+  SemVer &operator=(SemVer &&o) noexcept {
     nsv_semver_t *const p = o.p_;  // in this order, self-move changes nothing
     o.p_ = nullptr;
     ::operator delete(p_);
     p_ = p;
     return *this;
   }
-  ~version() { ::operator delete(p_); }
+  ~SemVer() { ::operator delete(p_); }
 
   /* nsv_parse of s[0, len), copied into *this. Returns NSV_RET_OK, or ERR_ARG /
      ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, which also means a version too long to
@@ -131,22 +131,22 @@ class version {
 
 /* By semver precedence, through nsv_cmp. Build metadata never counts, so == is equal
    precedence, not identity: 1.0.0+a == 1.0.0+b. */
-inline bool operator==(version const &a, version const &b) noexcept {
+inline bool operator==(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) == NSV_CMP_EQ;
 }
-inline bool operator!=(version const &a, version const &b) noexcept {
+inline bool operator!=(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) != NSV_CMP_EQ;
 }
-inline bool operator<(version const &a, version const &b) noexcept {
+inline bool operator<(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) == NSV_CMP_LT;
 }
-inline bool operator<=(version const &a, version const &b) noexcept {
+inline bool operator<=(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) != NSV_CMP_GT;
 }
-inline bool operator>(version const &a, version const &b) noexcept {
+inline bool operator>(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) == NSV_CMP_GT;
 }
-inline bool operator>=(version const &a, version const &b) noexcept {
+inline bool operator>=(SemVer const &a, SemVer const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) != NSV_CMP_LT;
 }
 
