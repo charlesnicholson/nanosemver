@@ -22,7 +22,7 @@
 > -> != (2nd) @ if ((x >= 429496729u) && ((x > 429496729u) || (d > 5u))) {  # with x >= 429496729u, x > it is x != it
 |= -> = @ h |= NSV_HOW_OVF;  # an overflow is an error, and the rest of h is never read
 7u -> 6u @ if ((h & 7u) == NSV_BIT_GT) {  # h & 7 is never 5: no operator takes < and > without =
-1u -> 2u (2nd) @ if (k && (((k == 1u) || (!++c->minor && !(k = 0u))) ? ++c->major : 1u)) {  # any nonzero value: no overflow
+1u -> 2u (2nd) @ if (k && (((k == 1u) || !(k = ++c->minor ? k : 0u)) ? ++c->major : 1u)) {  # any nonzero value: no overflow
 7u -> 6u @ h &= ~7u;  # h & 7 is NSV_BIT_GT here, so bit 0 is clear already
 7u -> 6u @ keep = (h >> 3) & 7u;  # keep is 0, 2, 3 or 4, and 3 becomes 2, which caps to the same k <= 2
 3u -> 2u @ keep = ((k == 2u) && c->major) ? 1u : 3u;  # capped at k <= 2 next

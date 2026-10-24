@@ -357,7 +357,7 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
     /* >1.2 is >=1.3, the next line; past UINT32_MAX nothing is above it. A carry takes
        k to 0, which keeps the -0 below in either mode: >1.4294967295 is npm's
        >=1.4294967296.0, and the first version above that is 2.0.0-0, not 2.0.0. */
-    if (k && (((k == 1u) || (!++c->minor && !(k = 0u))) ? ++c->major : 1u)) {
+    if (k && (((k == 1u) || !(k = ++c->minor ? k : 0u)) ? ++c->major : 1u)) {
       h ^= NSV_BIT_EQ;
     } else {
       h &= ~7u;
