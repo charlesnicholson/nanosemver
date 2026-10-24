@@ -138,6 +138,23 @@ TEST_CASE("nsv_copy: a copy is relocatable") {
   REQUIRE(nsv_test::format(*reinterpret_cast<nsv_semver_t *>(ar.at(0))) == s);
 }
 
+TEST_CASE("nsv_copy: terminates both strings over junk, present or absent") {
+  for (char const *cs : { "1.2.3", "1.2.3-a", "1.2.3+b", "1.2.3-a+b", "1.2.3-alpha.1+x.y.z" }) {
+    std::string const s = cs;  // v views it
+    nsv_semver_t const v = parse_ok(s);
+    size_t const n = static_cast<size_t>(nsv_copy(nullptr, 0, &v));
+    for (int junk : { 0x00, 0x01, 0x5C, 0xFF }) {
+      arena ar(n);
+      std::memset(ar.at(0), junk, n);
+      REQUIRE(nsv_copy(ar.at(0), n, &v) == static_cast<int>(n));
+      char const *const tail = reinterpret_cast<char const *>(ar.at(0)) + sizeof(nsv_semver_t);
+      INFO(s, " over ", junk);
+      REQUIRE(tail[v.pre_len] == '\0');
+      REQUIRE(tail[v.pre_len + 1u + v.build_len] == '\0');
+    }
+  }
+}
+
 TEST_CASE("nsv_copy: misaligned destination") {
   std::string const s = "1.2.3-a+b";
   nsv_semver_t const v = parse_ok(s);
@@ -180,6 +197,9 @@ TEST_CASE("nsv_copy: writes exactly the bytes it reports") {
     REQUIRE(*ar.at(i) == 0x5C);
   }
   REQUIRE(nsv_test::format(*reinterpret_cast<nsv_semver_t *>(ar.at(0))) == s);
+  // Both strings are terminated, whatever was there before.
+  char const *const tail = reinterpret_cast<char const *>(ar.at(0)) + sizeof(nsv_semver_t);
+  REQUIRE(std::memcmp(tail, "alpha.1\0build.99\0", 17) == 0);
 }
 
 TEST_CASE("nsv_copy: into a static wrapper struct, as the header documents") {

@@ -16,12 +16,14 @@
 #   NODE, NODE_SEMVER  Node.js and npm's semver package directory for `make npm-check`;
 #                   envy's by default
 #   NPM_ARGS        generated ranges for `make npm-check`, and a seed (200000 1)
+#   MUTATE_ARGS     tests/mutate.py arguments for `make mutate`, e.g. --jobs 4
 #   V=1             echo full commands
 #
 # Targets:
 #   test        (default) the unit tests, built twice: as configured, and as for a
 #               small MCU like an AVR, whose 16-bit int needs the length checks that
-#               -DNSV_INT_MAX=32767 compiles in, and division by shifts
+#               -DNSV_INT_MAX=32767 compiles in, division by shifts, and nsv_cmp's
+#               32-bit compare
 #   fuzz        the standalone fuzz driver; any compiler
 #   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
@@ -36,6 +38,8 @@
 #   ratchet-update  lowers size-budget.mk and bench/cm/ratchet.txt to what the code now
 #               takes; never raises them
 #   npm-check   nsv_range_match against npm's own semver package, under Node.js
+#   mutate      mutation testing: fails if the unit tests miss any change to
+#               nanosemver.c that tests/mutate-equivalent.txt does not explain
 #   clean       everything under build/ except the envy and uv package caches
 
 CFG  ?= Release
@@ -116,7 +120,7 @@ CFLAGS   := -std=c99 $(WARN) $(WARN_C) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA
 CXXFLAGS := -std=c++20 $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS) \
             $(DOCTEST_INC)
 LDFLAGS  := $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS)
-INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1
+INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1 -DNSV_WIDE_CMP=0
 
 # --- sources ----------------------------------------------------------------------
 # Globbed, so a new test file needs no registration here; build.bat globs the same.
@@ -134,7 +138,7 @@ ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ))
 
 # --- rules ------------------------------------------------------------------------
 .PHONY: test fuzz libfuzzer coverage bench bench-cm size size-check ratchet ratchet-update \
-        npm-check clean FORCE
+        npm-check mutate clean FORCE
 .DEFAULT_GOAL := test
 
 test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ)
@@ -450,6 +454,16 @@ $(NPM_BUILD)/nsv_npm_emit: tests/npm/emit.cc tests/fuzz/gen.cc tests/fuzz/gen.h 
 npm-check: $(NPM_BUILD)/nsv_npm_emit
 	$(Q)$< $(NPM_ARGS) > $(NPM_BUILD)/cases.jsonl
 	$(Q)SEMVER="$(NODE_SEMVER)" "$(NODE)" tests/npm/judge.js < $(NPM_BUILD)/cases.jsonl
+
+# --- mutation testing ---------------------------------------------------------------
+# One change at a time to nanosemver.c, each built against this configuration's test
+# objects, both ways. uv provides the Python.
+MUTATE_ARGS ?=
+mutate: $(BUILD)/nsv_unittests $(BUILD)/nsv_unittests_int16
+ifneq ($(SAN),)
+	$(error mutants link without the sanitizer runtime; build without SAN)
+endif
+	$(Q)CC="$(CC)" CXX="$(CXX)" $(UV) run --quiet tests/mutate.py $(BUILD) $(MUTATE_ARGS)
 
 # Everything under build/ except the package caches: refetching them is not what
 # anyone means by `make clean`. `rm -rf build` for that.

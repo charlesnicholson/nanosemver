@@ -1,6 +1,7 @@
 // Writes the cases for tests/npm/judge.js, one JSON array per line:
 //   [range, version, nsv_range_match(range, version, 0), ...(NSV_RANGE_EXCLUDE_PRE)]
-// for every range nanosemver accepts: the corpus ranges against the corpus versions,
+// for every range nanosemver accepts: the unit tests' tables, the corpus ranges against
+// the corpus versions,
 // every range of up to two comparators built from a few operators and versions, whole
 // and partial, against versions around them, and generated ranges from the fuzz
 // generator. Ranges with !=, which npm has not, go too; the judge counts them aside.
@@ -8,6 +9,7 @@
 //   nsv_npm_emit [generated-count [seed]]
 #include "../corpus.h"
 #include "../fuzz/gen.h"
+#include "../range_cases.h"
 #include "nanosemver.h"
 
 #include <cstdio>
@@ -56,6 +58,12 @@ int main(int argc, char **argv) {
   unsigned long const generated = (argc > 1) ? std::strtoul(argv[1], nullptr, 10) : 200000;
   nsv_fuzz::rng r((argc > 2) ? std::strtoull(argv[2], nullptr, 10) : 1);
 
+  // The unit tests' own tables, so their answers are npm's.
+  for (range_cases::table const &t : range_cases::k_all) {
+    for (unsigned i = 0; i < t.n; ++i) {
+      emit(t.rows[i].range, t.rows[i].version);
+    }
+  }
   for (char const *range : corpus::k_ranges) {
     for (char const *version : corpus::k_valid) {
       emit(range, version);

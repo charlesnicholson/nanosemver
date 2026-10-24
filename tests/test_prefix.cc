@@ -1,4 +1,5 @@
 #include "corpus.h"
+#include "fuzz/gen.h"
 #include "nsv_test.h"
 #include "ref_semver.h"
 
@@ -227,6 +228,51 @@ TEST_CASE("nsv_parse_prefix: every string of up to six bytes, one of each kind")
           s += k_kinds[m % sizeof(k_kinds)];
         }
         check(s);
+      }
+    }
+  }
+}
+
+TEST_CASE("nsv_parse_prefix: properties over generated strings") {
+  // Whatever the reference says: the prefix found parses whole to the same result, finds
+  // itself again, never grows when the string is cut, and never changes for whatever
+  // follows a byte that cannot be in a version.
+  static char const *const tails[] = { "", " ", "\x01", ",", "|", "<", "\xff", "_", "\n" };
+  nsv_fuzz::rng r(201);
+  for (int n = 0; n < 30000; ++n) {
+    std::string s = nsv_fuzz::gen_version(r);
+    if (s.size() > 300) {
+      continue;
+    }
+    if (r.chance(50)) {
+      s += nsv_fuzz::gen_version(r).substr(0, r.below(8));
+    }
+    prefix_result const a = parse_prefix(s);
+    std::string const pre = s.substr(0, a.consumed);
+    // a.v views the guarded copy, which the next parse_prefix overwrites.
+    std::string const formatted = (a.rc == NSV_RET_OK) ? nsv_test::format(a.v) : "";
+    INFO("\"", s, "\"");
+    REQUIRE(a.consumed <= s.size());
+    REQUIRE((a.rc == NSV_RET_ERR_SYNTAX) == (a.consumed == 0));
+    if (a.consumed) {
+      nsv_semver_t v{};
+      REQUIRE(nsv_parse(&v, pre.data(), pre.size()) == a.rc);
+      prefix_result const b = parse_prefix(pre);
+      REQUIRE(b.consumed == a.consumed);
+      REQUIRE(b.rc == a.rc);
+      if (a.rc == NSV_RET_OK) {
+        REQUIRE(formatted == nsv_test::format(v));
+      }
+    }
+    size_t const cut = r.below(static_cast<uint32_t>(s.size() + 1));
+    REQUIRE(parse_prefix(s.substr(0, cut)).consumed <= a.consumed);
+    for (char const *t : tails) {
+      std::string const junk = std::string(t) + "1.2.3";
+      if (*t && !(((*t >= '0') && (*t <= '9')) || ((*t | 0x20) >= 'a' && (*t | 0x20) <= 'z') ||
+                  (*t == '-') || (*t == '.') || (*t == '+'))) {
+        prefix_result const c = parse_prefix(s + junk);
+        REQUIRE(c.consumed == a.consumed);
+        REQUIRE(c.rc == a.rc);
       }
     }
   }

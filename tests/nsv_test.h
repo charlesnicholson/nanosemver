@@ -21,7 +21,10 @@ inline int parse_rc(std::string_view s) {
   return nsv_parse(&v, g.place(s), s.size());
 }
 
-// Parses s or fails the test. The view points into s, which must outlive it.
+// Parses s or fails the test. The view points into s, which must outlive it: a temporary
+// would not, so passing one does not compile.
+nsv_semver_t parse_ok(std::string &&) = delete;
+nsv_semver_t parse_ok(char const *) = delete;
 inline nsv_semver_t parse_ok(std::string const &s) {
   nsv_semver_t v{};
   INFO("parsing \"", s, "\"");
@@ -60,9 +63,11 @@ struct free_deleter {
 };
 using blob = std::unique_ptr<nsv_semver_t, free_deleter>;
 
+// Filled with junk, so nothing passes for having been written when malloc zeroed it.
 inline blob alloc_blob(size_t n) {
   blob b(static_cast<nsv_semver_t *>(std::malloc(n)));
   REQUIRE(b != nullptr);
+  std::memset(static_cast<void *>(b.get()), 0xA5, n);
   return b;
 }
 

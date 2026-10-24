@@ -1,0 +1,42 @@
+# Mutants of nanosemver.c that change nothing a caller can observe, so no test can kill
+# them; tests/mutate.py skips them. One per line: the mutation, " @ ", the line it is on
+# (trimmed), then two spaces, "#" and why it is equivalent.
+1 -> 2 @ alpha = 1;  # alpha is only tested for zero
+> -> != @ if (pre && !alpha && (*b == '0') && ((p - b) > 1)) {  # p > b here: the identifier is not empty
+3 -> 4 (2nd) @ uint32_t num[3];  # a bigger array, never indexed past 2
+< -> != @ for (k = 0; k < 3u; ++k) {  # k counts up from 0 by 1
+> -> != (2nd) @ if ((x >= 429496729u) && ((x > 429496729u) || (d > 5u))) {  # with x >= 429496729u, x > it is x != it
+1 -> 2 @ ovf = 1;  # ovf is only tested for zero
+< -> != @ if (k < 2u) {  # k is 0, 1 or 2
+1 -> 2 @ pre_e = p = nsv_scan_ids(p, e, 1);  # pre is only tested for zero
+1 -> 2 (2nd) @ p = nsv_scan_ids(p + 1, e, 1);  # pre is only tested for zero
+< -> <= @ size_t const n = (an < bn) ? an : bn;  # either is the minimum when they are equal
+< -> != @ while ((i < n) && (a[i] == b[i])) {  # i counts up from 0 by 1, and n >= 0
+> -> != @ for (k = i; (k > 0) && nsv_is_digit(a[k - 1]); --k) {  # k is unsigned
+< -> != @ for (ae = i; (ae < an) && nsv_is_digit(a[ae]); ++ae) {  # ae counts up by 1 from i < an
+< -> != @ for (be = i; (be < bn) && nsv_is_digit(b[be]); ++be) {  # be counts up by 1 from i < bn
+< -> <= @ return (ae < be) ? -1 : 1;  # only reached with ae != be
+0u -> 1u @ ca = (a[i] == '.') ? 0u : (unsigned char)a[i];  # 1 is below every identifier byte too, and b[i] is not also '.'
+0u -> 1u @ cb = (b[i] == '.') ? 0u : (unsigned char)b[i];  # 1 is below every identifier byte too, and a[i] is not also '.'
+< -> <= @ return (ca < cb) ? -1 : 1;  # a[i] != b[i], and '.' maps to no identifier byte, so ca != cb
+< -> <= @ return (x < y) ? NSV_CMP_LT : NSV_CMP_GT;  # only reached with x != y
+0u -> 1u @ unsigned const ch = (p != e) ? (unsigned char)*p : 0u;  # 1 is no digit or wildcard either: a syntax error the same
+> -> != (2nd) @ if ((x >= 429496729u) && ((x > 429496729u) || (d > 5u))) {  # with x >= 429496729u, x > it is x != it
+|= -> = @ h |= NSV_HOW_OVF;  # an overflow is an error, and the rest of h is never read
+2u -> 3u @ if ((acc - 3u) < 2u) {  # acc is never 5: != is = with NSV_HOW_NOT
+< -> <= @ if ((acc - 3u) < 2u) {  # acc is never 5: != is = with NSV_HOW_NOT
+1u -> 2u (2nd) @ if (k && (((k == 1u) || !++c->minor) ? ++c->major : 1u)) {  # any nonzero value: no overflow
+0u -> 1u @ h = (h & ~7u) | ((acc & 1u) ? 7u : 0u);  # > past the top: LT against the wrapped 0.0.0-0 bound admits nothing too
+1u -> 2u @ h = (h & ~7u) | ((acc & 1u) ? 7u : 0u);  # acc is 3 or 4 here, and only 3 has bit 1 too
+7u -> 6u (1st) @ h = (h & ~7u) | ((acc & 1u) ? 7u : 0u);  # bit 0 left over is acc's: 1 for <=, which ORs in 7 anyway, 0 for >
+7u -> 6u (2nd) @ h = (h & ~7u) | ((acc & 1u) ? 7u : 0u);  # <= past the top: nothing is LT the wrapped 0.0.0-0 bound anyway
+7u -> 6u @ keep = (h >> 3) & 7u;  # keep is 0, 2, 3 or 4, and 3 becomes 2, which caps to the same k <= 2
+3u -> 2u @ keep = ((k == 2u) && c->major) ? 1u : 3u;  # capped at k <= 2 next
+3u -> 4u @ keep = ((k == 2u) && c->major) ? 1u : 3u;  # capped at k <= 2 next
+< -> <= @ h = (h & ~NSV_HOW_KEEP(7)) | NSV_HOW_KEEP((keep < k) ? keep : k);  # either is the minimum when they are equal
+'\0' -> 'Q' @ char const op = (p != e) ? *p : '\0';  # 'Q' is no operator either: no version follows, a syntax error the same
+dropped: continue; @ continue;  # the range's result is the error already recorded; only MSan would see c read uninitialized
+3u -> 2u @ if (keep > 3u) {  # keep 3 is = and !=, whose EQ already means all three numbers match
+> -> >= @ if (keep > 3u) {  # keep 3 is = and !=, whose EQ already means all three numbers match
+|= -> = @ state |= 1u;  # with bit 0 set the set has failed, whatever bit 1 says
+< -> != @ while ((n < 10u) && (v >= p)) {  # n counts up from 1 by 1

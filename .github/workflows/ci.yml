@@ -281,6 +281,26 @@ jobs:
       - name: Against node-semver
         run: make npm-check NPM_ARGS="1000000 1"
 
+  # Mutation testing: every change to nanosemver.c the unit tests do not catch is either
+  # explained in tests/mutate-equivalent.txt or a failure.
+  mutate:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/charlesnicholson/docker-image:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            build/envy-cache
+            build/uv-cache
+          key: mutate-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
+      - name: Mutants of nanosemver.c
+        run: make -j"$(nproc)" mutate MUTATE_ARGS="--jobs $(nproc)"
+
   # The DOCTEST_H opt-out: no container, no envy, the runner's own compilers.
   without-envy:
     runs-on: ubuntu-latest
@@ -302,7 +322,7 @@ jobs:
   # checks that this list names every job.
   all-checks-pass:
     needs: [ lint, linux, linux-arm64, sanitizers, coverage, fuzz, macos, windows,
-             embedded, npm, without-envy ]
+             embedded, npm, mutate, without-envy ]
     if: always()
     runs-on: ubuntu-latest
     steps:

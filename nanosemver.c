@@ -23,6 +23,17 @@
 #endif
 #endif
 
+/* nsv_cmp takes major and minor as one 64-bit key where registers are that wide, and
+   compares field by field elsewhere. Defining NSV_WIDE_CMP picks one, so the tests build
+   both on any host. */
+#ifndef NSV_WIDE_CMP
+#if UINTPTR_MAX > 0xFFFFFFFFu
+#define NSV_WIDE_CMP 1
+#else
+#define NSV_WIDE_CMP 0
+#endif
+#endif
+
 /* NSV_NOINLINE keeps a rarer path's code and register pressure out of its caller.
    NSV_INLINE inlines a hot helper into its callers when optimizing for speed, where
    compilers otherwise decide differently with every small change; under -Os the
@@ -247,7 +258,7 @@ static NSV_NOINLINE int nsv_cmp_pre(char const *a, size_t an, char const *b, siz
 }
 
 int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
-#if UINTPTR_MAX > 0xFFFFFFFFu
+#if NSV_WIDE_CMP
   /* 64-bit registers take major and minor as one key, sparing a sort's comparator an
      unpredictable branch. */
   uint64_t x, y;

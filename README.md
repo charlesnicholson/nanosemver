@@ -217,7 +217,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs and division by shifts |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
 | `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
@@ -227,6 +227,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 | `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks |
 | `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
 | `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
+| `make mutate MUTATE_ARGS="--jobs 8"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |
 | `build.bat [fuzz \| clean]` | the unit tests, both configurations, and optionally the fuzz driver, with MSVC |
 
 The tests check `nanosemver.c` against a deliberately naive reference implementation in
@@ -240,8 +241,23 @@ both directions, the prefix parse, and ranges around the version, all against th
 reference. `tests/test_long.cc` runs those checks exhaustively on long sections: every
 byte value at every position, every length up to 40, and comparisons that differ at
 every position. Exhaustively too: every string of up to six bytes of each kind for the
-prefix parse, every range of up to three comparators for the matcher, and every byte at
-every position of a range.
+prefix parse; every range of up to three comparators over whole versions, and of up to two
+over whole and partial versions and `!=`, for the matcher; and every byte at every
+position of a range. The matcher's hand-written cases are shared with the reference, which
+has to give the same answers, and `make npm-check` holds them to npm's.
+
+Some properties need no oracle at all, and `tests/test_range_props.cc` checks them on
+random ranges against versions at every boundary: every operator agrees with its
+definition in terms of the others, `||` is the union of its sets, spacing, order and
+repetition change nothing, a set of bounds admits an unbroken run of versions,
+`NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
+metadata on the version never matters.
+
+`make mutate` measures all of that: it makes a thousand small changes to
+`nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a
+dropped statement, and fails unless the tests catch every one that changes behavior.
+The few that cannot, like `k < 3` for `k != 3` in a loop counting up from zero, are listed
+with their reasons in `tests/mutate-equivalent.txt`.
 
 ## Releases
 

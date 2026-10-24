@@ -28,11 +28,13 @@ struct free_deleter {
 };
 using blob = std::unique_ptr<nsv_semver_t, free_deleter>;
 
+// Filled with junk, so nothing passes for having been written when malloc zeroed it.
 blob alloc_blob(size_t n) {
   blob b(static_cast<nsv_semver_t *>(std::malloc(n)));
   if (!b) {
     std::abort();
   }
+  std::memset(static_cast<void *>(b.get()), 0xA5, n);
   return b;
 }
 
