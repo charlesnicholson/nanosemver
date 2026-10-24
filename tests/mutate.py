@@ -10,7 +10,7 @@ for the first, an entry in tests/mutate-equivalent.txt, with the reason, for the
 Entries match on the mutation and the line's text, so they follow code that moves; one
 that no longer matches anything is reported as stale. Any survivor or stale entry fails.
 
-  tests/mutate.py BUILD-DIR [--jobs N] [--filter SUBSTR] [--list]
+  tests/mutate.py BUILD-DIR [--jobs N] [--shard K/N] [--filter SUBSTR] [--list]
 
 BUILD-DIR is a `make` build directory whose test objects are up to date, e.g.
 build/cc-Release-64. CC and CXX come from the environment (cc / c++).
@@ -241,7 +241,14 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--filter", default="")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--shard", default="0/1", metavar="K/N",
+                    help="run every Nth mutant, starting with the Kth (0-based)")
     args = ap.parse_args()
+    try:
+        shard, shards = (int(x) for x in args.shard.split("/"))
+        assert 0 <= shard < shards
+    except (ValueError, AssertionError):
+        sys.exit(f"--shard {args.shard}: want K/N with 0 <= K < N")
     objs = {False: objects(args.build, False), True: objects(args.build, True)}
     if not objs[False] or not objs[True]:
         sys.exit(f"no test objects under {args.build}; run make first")
@@ -265,7 +272,10 @@ def main():
             skipped += 1
         elif args.filter in m[1]:
             ms.append(m)
-    stale = [k for k, used in equivalent.items() if not used]
+    # Every shard sees the same list, so each takes its own slice of it; stale entries
+    # are about the whole list, and only the first shard reports them.
+    ms = ms[shard::shards]
+    stale = [k for k, used in equivalent.items() if not used] if shard == 0 else []
     if args.list:
         for line, desc, _ in ms:
             print(f"{line}: {desc}")
@@ -290,7 +300,8 @@ def main():
         print(f"SURVIVED nanosemver.c:{line}: {desc} @ {lines[line - 1].strip()}")
     for desc, ln in stale:
         print(f"STALE {EQUIVALENT}: {desc} @ {ln}")
-    print(f"{len(results)} mutants: {killed} killed, {len(surv)} survived, {bad} did not build; "
+    print(f"{len(results)} mutants{f' (shard {shard}/{shards})' if shards > 1 else ''}: "
+          f"{killed} killed, {len(surv)} survived, {bad} did not build; "
           f"{skipped} equivalent, skipped")
     return 1 if (surv or stale) else 0
 

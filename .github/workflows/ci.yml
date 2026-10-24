@@ -282,9 +282,15 @@ jobs:
         run: make npm-check NPM_ARGS="1000000 1"
 
   # Mutation testing: every change to nanosemver.c the unit tests do not catch is either
-  # explained in tests/mutate-equivalent.txt or a failure.
+  # explained in tests/mutate-equivalent.txt or a failure. Eight shards, each every
+  # eighth mutant, keep it to a few minutes.
   mutate:
+    name: mutate (shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 0, 1, 2, 3, 4, 5, 6, 7 ]
     container:
       image: ghcr.io/charlesnicholson/docker-image:latest
       credentials:
@@ -299,7 +305,7 @@ jobs:
             build/uv-cache
           key: mutate-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
       - name: Mutants of nanosemver.c
-        run: make -j"$(nproc)" mutate MUTATE_ARGS="--jobs $(nproc)"
+        run: make -j"$(nproc)" mutate MUTATE_ARGS="--jobs $(nproc) --shard ${{ matrix.shard }}/8"
 
   # The DOCTEST_H opt-out: no container, no envy, the runner's own compilers.
   without-envy:
