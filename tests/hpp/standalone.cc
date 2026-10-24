@@ -4,9 +4,7 @@
 // NSV_SEMVER_LIT: its designated initializers are C++20.
 #include "nanosemver.hpp"
 
-int nsv_hpp_standalone(char const *s, size_t len);
-
-int nsv_hpp_standalone(char const *s, size_t len) {
+inline int nsv_hpp_standalone(char const *s, size_t len) {
   nsv::SemVer a;
   size_t consumed = 0;
   int r = a.parse(s, len) + a.parse(s) + a.parse_prefix(s, len, consumed);
