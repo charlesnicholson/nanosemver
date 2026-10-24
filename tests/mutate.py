@@ -30,6 +30,9 @@ SRC = os.path.join(ROOT, "nanosemver.c")
 INT16 = ["-DNSV_INT_MAX=32767", "-DNSV_SOFT_DIV=1", "-DNSV_WIDE_CMP=0"]
 TIMEOUT = 120
 EQUIVALENT = "tests/mutate-equivalent.txt"
+# The unit tests that take most of the time, as doctest filters (commas separate them).
+SLOW = ",".join(["*every range of up to three*", "fuzz: generated inputs",
+                 "*every byte at every position*", "*every string of up to six bytes*"])
 
 
 def code_mask(text):
@@ -219,13 +222,16 @@ def run_one(args, mutant, workdir):
         if subprocess.run([cxx] + args.objs[int16] + [obj, "-o", exe],
                           capture_output=True).returncode:
             return (line, desc, "compile")
-        try:
-            r = subprocess.run([exe, "-m", "--abort-after=1"], capture_output=True,
-                               timeout=TIMEOUT)
-            if r.returncode:
-                return (line, desc, "killed")
-        except subprocess.TimeoutExpired:
-            return (line, desc, "killed")  # a hang is a failure too
+        # The quick tests first, which kill most mutants; the slow ones only for what
+        # survives them. Either way every test runs before a mutant counts as surviving.
+        for which in ("--test-case-exclude=" + SLOW, "--test-case=" + SLOW):
+            try:
+                r = subprocess.run([exe, "-m", "--abort-after=1", which], capture_output=True,
+                                   timeout=TIMEOUT)
+                if r.returncode:
+                    return (line, desc, "killed")
+            except subprocess.TimeoutExpired:
+                return (line, desc, "killed")  # a hang is a failure too
     return (line, desc, "SURVIVED")
 
 

@@ -8,6 +8,7 @@
 #include "nsv_test.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <string>
@@ -76,6 +77,11 @@ void same_everywhere(std::string const &a, std::string const &b) {
 template <typename A>
 auto pick(nsv_fuzz::rng &r, A const &a) {
   return a[r.below(static_cast<uint32_t>(std::size(a)))];
+}
+
+// A random place in a container of n, as an iterator offset.
+std::ptrdiff_t offset(nsv_fuzz::rng &r, size_t n) {
+  return static_cast<std::ptrdiff_t>(r.below(static_cast<uint32_t>(n)));
 }
 
 std::string comparator(nsv_fuzz::rng &r) {
@@ -187,9 +193,9 @@ TEST_CASE("range properties: spacing, order and repetition do not matter") {
     same_everywhere(base, render(rg, 1 + r.below(15)));
     // Comparators within a set, and sets within the range, in another order.
     for (set &s : rg) {
-      std::rotate(s.begin(), s.begin() + r.below(static_cast<uint32_t>(s.size())), s.end());
+      std::rotate(s.begin(), s.begin() + offset(r, s.size()), s.end());
     }
-    std::rotate(rg.begin(), rg.begin() + r.below(static_cast<uint32_t>(rg.size())), rg.end());
+    std::rotate(rg.begin(), rg.begin() + offset(r, rg.size()), rg.end());
     same_everywhere(base, render(rg, r.below(16)));
     // A comparator twice, a set twice.
     set &s0 = rg[r.below(static_cast<uint32_t>(rg.size()))];

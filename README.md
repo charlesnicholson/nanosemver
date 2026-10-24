@@ -91,122 +91,164 @@ The spec sets no limits on length or numeric size; nanosemver's are `uint32_t` n
 and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` and
 `TOO_LONG` only ever describe valid semver.
 
+## Comparing versions
+
+`nsv_cmp` ranks two versions by semver precedence (semver.org §11):
+
+1. `MAJOR`, `MINOR` and `PATCH` compare as numbers, in that order: `1.9.0 < 1.10.0 < 2.0.0`.
+2. A pre-release ranks below its release: `1.0.0-rc.1 < 1.0.0`.
+3. Two pre-releases of the same version compare identifier by identifier, left to right:
+   - numeric identifiers as numbers: `1.0.0-beta.2 < 1.0.0-beta.11`;
+   - alphanumeric ones in ASCII order, so uppercase first: `1.0.0-RC < 1.0.0-rc`;
+   - a numeric identifier below an alphanumeric one: `1.0.0-1 < 1.0.0-alpha`;
+   - and when one runs out first, it ranks below: `1.0.0-alpha < 1.0.0-alpha.1`.
+4. Build metadata never counts: `1.0.0+a` and `1.0.0+b` are `NSV_CMP_EQ`, equal in
+   precedence though not identical.
+
+semver.org's own example, in order:
+`1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 <
+1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0`.
+
 ## Ranges
 
-There is no range standard: semver.org defines versions and their precedence, nothing
-more. The nearest thing is npm's [grammar](https://github.com/npm/node-semver#range-grammar),
-which Composer, Conan and Neargye's C++ semver follow closely too, so `nsv_range_match`
-takes it, without hyphen ranges, plus `!=`, and npm reads every range it accepts the same
-way:
+`nsv_range_match(s, len, v, flags)` answers whether `v` is in a range like
+`>=1.2.0 <1.4.0 || ^2.1.0`. There is no range standard: semver.org defines versions and
+precedence, nothing more. The nearest thing is npm's
+[grammar](https://github.com/npm/node-semver#range-grammar), which Composer, Conan and
+Neargye's C++ semver follow closely too. nanosemver takes npm's, without hyphen ranges,
+plus `!=`, and npm reads every range nanosemver accepts the same way.
 
-| Range | Matches |
-|---|---|
-| `1.2.3`, `=1.2.3` | equal precedence: build metadata never matters |
-| `<1.2.3`, `<=1.2.3`, `>1.2.3`, `>=1.2.3` | by `nsv_cmp` precedence |
-| `!=1.2.3` | anything else; not npm's, but Neargye's, Python's (PEP 440) and Composer's |
-| `~1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` |
-| `^1.2.3`, `^0.2.3`, `^0.0.3` | `>=1.2.3 <2.0.0-0`, `>=0.2.3 <0.3.0-0`, `>=0.0.3 <0.0.4-0`: the same leftmost nonzero number |
-| `1.2`, `1.2.x`, `1.x`, `*` | the whole line, pre-releases and all: `>=1.2.0-0 <1.3.0-0`; `*` is everything |
-| `>=1.2`, `>1.2`, `<1.2`, `<=1.2` | `>=1.2.0-0`, `>=1.3.0-0`, `<1.2.0-0`, `<1.3.0-0` |
-| `!=1.4` | off the 1.4 line |
-| `~1`, `^1.2`, `^0.2` | `>=1.0.0-0 <2.0.0-0`, `>=1.2.0-0 <2.0.0-0`, `>=0.2.0-0 <0.3.0-0` |
-| `A B` | both: comparators separated by spaces or tabs, with optional spaces after an operator |
-| `A \|\| B` | either |
+### Syntax
 
-A partial version is up to three numbers followed by wildcards (`x`, `X` or `*`), with no
-pre-release or build. Hyphen ranges (`1.2.3 - 2.0.0`) are a syntax error, as are other
-grammars' spellings: Cargo and Python separate comparators with commas and have no OR,
-Python writes `==` and `~=`, and RubyGems `~>`. An empty range is an error too, and so
-is anything left over: the whole string must parse.
+- A **range** is one or more comparator sets separated by `||`, with optional spaces or
+  tabs around it. `v` is in the range if it is in any set.
+- A **set** is one or more comparators separated by spaces or tabs. `v` is in the set if
+  it satisfies every comparator in it.
+- A **comparator** is an optional operator, optional spaces or tabs, and a version:
+  `=`, `<`, `<=`, `>`, `>=`, `!=`, `~` or `^`, then `1.2.3`; no operator means `=`.
+- The **version** is a full semver 2.0.0 version, or a **partial** one: one to three
+  components, numbers then wildcards (`x`, `X` or `*`), with no pre-release or build, as
+  in `1`, `1.2`, `1.x`, `1.2.*` and `*`.
+- The whole string must parse: an empty range, a stray `|`, comparators run together, and
+  anything left over are all `NSV_RET_ERR_SYNTAX`, however `v` compares.
 
-A pre-release is, by default, just a version ranking below its release, as with npm's
-`includePrerelease`. So `>=1.0.0 <2.0.0` admits `2.0.0-rc.1`; `<2.0.0-0` stops below
-every 2.0.0 pre-release, as `^` and `~` do. `NSV_RANGE_EXCLUDE_PRE` is npm's default
-instead: a pre-release matches a set only if a comparator in it has a pre-release of the
-same `MAJOR.MINOR.PATCH`, so `>=1.5.0-beta <2.0.0` admits `1.5.0-rc.1` but not
-`1.6.0-rc.1`, and a partial version's lower bound is its `.0` release: `>=1.2` is
-`>=1.2.0`. `!=` and partial versions never let a pre-release in. The only differences
-from npm are its own special cases: it reads `>=0.0.0`, and the lower bound of `^0.0`,
-`~0.0.0`, `0.x` and the like, as `*`, which lets 0.0.0's pre-releases past it, and a set
-that is only `*` takes over the whole range, shutting out pre-releases the others name.
+### Whole versions
 
-`make npm-check` holds this to npm's own semver package: a million generated ranges,
+| Comparator | Means | Matches | Does not match |
+|---|---|---|---|
+| `1.2.3`, `=1.2.3` | equal precedence | `1.2.3`, `1.2.3+build` | `1.2.4`, `1.2.3-rc` |
+| `!=1.2.3` | not equal | `1.2.4`, `1.2.3-rc` | `1.2.3`, `1.2.3+b` |
+| `<1.2.3` | below | `1.2.2`, `1.2.3-rc` | `1.2.3` |
+| `<=1.2.3` | at or below | `1.2.3` | `1.2.4-0` |
+| `>1.2.3` | above | `1.2.4-0`, `1.3.0` | `1.2.3+b` |
+| `>=1.2.3` | at or above | `1.2.3` | `1.2.3-rc` |
+| `~1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` | `1.2.9` | `1.2.2`, `1.3.0-0` |
+| `^1.2.3` | `>=1.2.3 <2.0.0-0`: the same leftmost nonzero number | `1.9.0` | `2.0.0-rc.1` |
+| `^0.2.3` | `>=0.2.3 <0.3.0-0` | `0.2.9` | `0.3.0` |
+| `^0.0.3` | `>=0.0.3 <0.0.4-0` | `0.0.3` | `0.0.4` |
+
+`X.Y.Z-0` is the lowest version with that core, below all its pre-releases, so `<2.0.0-0`
+stops below every 2.0.0 pre-release, which `<2.0.0` does not.
+
+### Partial versions
+
+A partial version stands for its whole line, pre-releases and all, and the operators
+compare lines:
+
+| Comparator | Means | Matches | Does not match |
+|---|---|---|---|
+| `1.2`, `1.2.x`, `=1.2` | `>=1.2.0-0 <1.3.0-0` | `1.2.0-beta`, `1.2.99` | `1.3.0-0` |
+| `1`, `1.x`, `1.*.*` | `>=1.0.0-0 <2.0.0-0` | `1.0.0-0`, `1.99.0` | `2.0.0-0` |
+| `*`, `x` | everything | `0.0.0-0`, `9.9.9` | |
+| `!=1.4` | off the 1.4 line | `1.3.9`, `1.5.0` | `1.4.0-0`, `1.4.99` |
+| `<1.2` | below the 1.2 line: `<1.2.0-0` | `1.1.99` | `1.2.0-0` |
+| `<=1.2` | up to the end of it: `<1.3.0-0` | `1.2.99` | `1.3.0-0` |
+| `>1.2` | above it: `>=1.3.0-0` | `1.3.0-0` | `1.2.99` |
+| `>=1.2` | from its start: `>=1.2.0-0` | `1.2.0-beta` | `1.1.9` |
+| `~1.2`, `~1` | the line, like `1.2` and `1` | `1.2.9`; `1.9.9` | `1.3.0-0`; `2.0.0-0` |
+| `^1.2` | `>=1.2.0-0 <2.0.0-0` | `1.9.9` | `2.0.0-0` |
+| `^0.2` | `>=0.2.0-0 <0.3.0-0` | `0.2.9` | `0.3.0-0` |
+| `^0.0`, `^0` | `<0.1.0-0`, `<1.0.0-0` | `0.0.9`; `0.9.9` | `0.1.0`; `1.0.0` |
+
+At the top of the range, `>1.4294967295` carries into the next number, so it matches
+`2.0.0`, and nothing is above `>4294967295`.
+
+### Combining
+
+| Range | Matches | Does not match |
+|---|---|---|
+| `>=1.2.0 <1.4.0 \|\| ^2.1.0` | `1.3.5`, `2.5.0` | `2.0.0` |
+| `>=1.2 !=1.3.1 <2` | `1.3.2` | `1.3.1` |
+| `>= 1.2.3 < 2` | `1.5.0` | `2.0.0` |
+
+### Pre-releases
+
+By default a pre-release is just a version that ranks below its release, as with npm's
+`includePrerelease`. `NSV_RANGE_EXCLUDE_PRE` gives npm's default instead:
+
+- a pre-release `v` is in a set only if a comparator in it names a pre-release of the same
+  `MAJOR.MINOR.PATCH`; `!=` and partial versions never do;
+- and a partial version's lower bound is its `.0` release, so `>=1.2` is `>=1.2.0`.
+
+| Range | Version | Default | `NSV_RANGE_EXCLUDE_PRE` |
+|---|---|---:|---:|
+| `>=1.0.0 <2.0.0` | `1.5.0-beta` | 1 | 0 |
+| `>=1.0.0 <2.0.0` | `2.0.0-rc.1` | 1 | 0 |
+| `>=1.0.0 <2.0.0-0` | `2.0.0-rc.1` | 0 | 0 |
+| `>=1.5.0-beta <2.0.0` | `1.5.0-rc.1` | 1 | 1 |
+| `>=1.5.0-beta <2.0.0` | `1.6.0-rc.1` | 1 | 0 |
+| `^1.2.3-beta.2` | `1.2.3-beta.4` | 1 | 1 |
+| `^1.2.3-beta.2` | `1.2.4-beta.2` | 1 | 0 |
+| `1.2` | `1.2.0-beta` | 1 | 0 |
+| `>=1.2 <1.2.0-rc.5` | `1.2.0-beta` | 1 | 0 |
+| `!=1.2.3-rc.1` | `1.2.3-rc.2` | 1 | 0 |
+
+The flag only ever takes matches away, and never from a release.
+
+### Errors
+
+`NSV_RET_ERR_SYNTAX` for a malformed range wins over everything. Otherwise a version in
+the range beyond nanosemver's limits, a number past `UINT32_MAX` (`<4294967296.0.0`,
+`>=4294967296`) or a version longer than 65535 bytes, is `NSV_RET_ERR_OVERFLOW` or
+`NSV_RET_ERR_TOO_LONG`, the first such in the range, whether or not `v` would match.
+
+### Coming from another grammar
+
+Each of these is a syntax error, not a guess at what was meant:
+
+| Written | Grammar | In nanosemver |
+|---|---|---|
+| `1.2.3 - 2.3.4` | npm | `>=1.2.3 <=2.3.4` |
+| `>=1.2, <1.5` | Cargo, Python (PEP 440) | `>=1.2 <1.5` |
+| `==1.2.3` | Python, Composer | `1.2.3` or `=1.2.3` |
+| `~=1.4.5` | Python | `~1.4.5` |
+| `~> 1.4.5` | RubyGems, Hex | `~1.4.5` |
+| `v1.2.3`, `=v1.2.3` | npm | `1.2.3` |
+| `>=1.0.0<2.0.0` | Neargye 1.0.0-rc | `>=1.0.0 <2.0.0` |
+| an empty range | npm, meaning any | `*` |
+
+And one that is not an error but means something else elsewhere: Cargo reads a bare
+`1.2.3` as `^1.2.3`; here it is exactly `1.2.3`.
+
+### Where npm differs
+
+npm reads two things its own way. In its default mode it treats `>=0.0.0`, and the lower
+bound of `^0.0`, `~0.0.0`, `0.x` and the like, as `*`, which lets 0.0.0's pre-releases
+past it. And a set that is only `*` takes over the whole range, shutting out
+pre-releases the other sets name. nanosemver does neither. Everywhere else,
+`make npm-check` holds it to npm's own semver package: a million generated ranges,
 every range of up to two comparators over the operators and whole and partial versions,
-and the test corpus, against versions around their bounds. Ranges with `!=` are left to
-the reference tests.
+the unit tests' own cases, and the test corpus, against versions around their bounds.
+Ranges with `!=` are left to the reference tests.
 
-## Performance
+## Building
 
-`nsv_parse` reads each byte once and never divides: overflow is caught by a comparison
-per digit. `nsv_cmp` settles most comparisons on the numbers alone; when the pre-release
-decides, it finds the first byte where the two differ and classifies only the identifier
-around it, instead of splitting both into identifiers. On cores without a fast divide,
-`nsv_format` divides by shifts and adds, so nothing from libgcc is linked in: on every
-Cortex-M, `memcpy` is the only call out of `nanosemver.c`. `nsv_range_match` reads the
-range once, without allocating, and each version in it twice: once to find where it ends,
-once to parse it, which keeps `nsv_parse`'s one pass to itself.
-
-Nanoseconds per call on an Apple M3 Pro at `-O2`; the Linux compilers ran in a VM on the
-same machine. Each workload is 1024 versions from a fixed-seed generator in
-`bench/bench.cc`: mostly one- and two-digit numbers, registry-style tags, hashes and
-timestamps, and for the ranges, mostly `^` and `~`, then bounded pairs, exact versions
-and alternatives, each against a version from the same mix.
-
-| Workload | Apple clang 21 | gcc 15 | clang 22 |
-|---|---:|---:|---:|
-| `nsv_parse`, releases (`4.17.21`) | 7.1 | 7.6 | 7.1 |
-| `nsv_parse`, pre-releases (`2.0.0-beta.3`) | 12.1 | 12.7 | 12.8 |
-| `nsv_parse`, both (`1.0.0-rc.1+sha.5114f85`) | 21.2 | 23.8 | 22.8 |
-| `nsv_parse`, 40-character hashes, 58 bytes | 36.5 | 42.2 | 41.0 |
-| `nsv_parse_prefix`, a version and what follows it | 15.2 | 18.2 | 15.4 |
-| `nsv_cmp`, the numbers decide | 1.0 | 1.1 | 1.1 |
-| `nsv_cmp`, the pre-release decides | 4.9 | 4.9 | 4.9 |
-| `nsv_range_match`, manifest-style (`^1.2.3`, `>=1.0.0 <2.0.0`) | 25.0 | 29.0 | 26.2 |
-| `nsv_range_match`, four bounded alternatives | 128.9 | 197.1 | 147.3 |
-| `nsv_format` | 7.9 | 7.7 | 7.6 |
-| `std::sort` of all 1024, using `nsv_cmp` | 15.9 µs | 14.3 µs | 17.0 µs |
-
-Cycles per call on Cortex-M at `-Os`, with the same inputs, counted in an emulator
-(exact instruction counts, cycles from a simple zero-wait-state model), and code size:
-
-| | Cortex-M0+ | Cortex-M4 |
-|---|---:|---:|
-| `nsv_parse`, releases | 227 | 239 |
-| `nsv_parse`, pre-releases | 401 | 414 |
-| `nsv_parse`, both | 649 | 669 |
-| `nsv_parse`, 40-character hashes | 1085 | 1157 |
-| `nsv_parse_prefix`, a version and what follows it | 461 | 486 |
-| `nsv_cmp`, the numbers decide | 24 | 26 |
-| `nsv_cmp`, the pre-release decides | 169 | 152 |
-| `nsv_range_match`, manifest-style (`^1.2.3`, `>=1.0.0 <2.0.0`) | 934 | 950 |
-| `nsv_range_match`, four bounded alternatives | 4717 | 4778 |
-| `nsv_range_match`, partial versions (`^1.2`, `1.x`, `>=1 !=1.4.1`) | 728 | 673 |
-| `nsv_format` | 322 | 240 |
-| `nanosemver.o`, bytes of code and data | 2288 | 2288 |
-
-All of it is a ratchet: `make ratchet` fails if the code grows past `size-budget.mk` or
-any workload takes more cycles than `bench/cm/ratchet.txt` allows, and `make
-ratchet-update` lowers both to what the code now takes. `nsv_range_match` and
-`nsv_parse_prefix` are 1028 of those bytes on a Cortex-M0+; built with
-`-ffunction-sections` and linked with `--gc-sections`, a program pays only for the
-functions it calls.
-
-`NSV_SOFT_DIV` selects the shift-and-add divide: 1 by default on Cortex-M0/M0+/M1, AVR,
-MSP430 and RISC-V without M, 0 elsewhere. Define it to override.
-
-### Measuring
-
-`make bench` builds this tree's `nanosemver.c` and `BENCH_BASE`'s (default `origin/main`)
-into one binary and times them interleaved, alternating which goes first, so thermal and
-frequency drift hit both alike; every workload also checksums both sides' results, and a
-mismatch voids the run. `make bench-cm` runs the same workloads through bare Cortex-M0+
-and Cortex-M4 images of both in the [Unicorn](https://www.unicorn-engine.org) emulator.
-A baseline from before `nsv_range_match` and `nsv_parse_prefix` times only this tree's.
-`make size` prints the Cortex-M code size function by function, and `make size-check`
-fails if it outgrows `size-budget.mk` or calls anything but `memcpy`. `make ratchet` adds
-the emulator's cycle counts, workload by workload, against `bench/cm/ratchet.txt`; CI
-runs it on every change. The Arm toolchain and [uv](https://docs.astral.sh/uv/), which
-provisions the emulator, come through envy on first use; `make` never touches them.
+Add `nanosemver.c` to your build. It calls nothing but `memcpy`. On cores without a fast
+divide, `nsv_format` divides by shifts and adds, so nothing from libgcc is linked in
+either: `NSV_SOFT_DIV` selects that, 1 by default on Cortex-M0/M0+/M1, AVR, MSP430 and
+RISC-V without M, 0 elsewhere; define it to override. Built with `-ffunction-sections`
+and linked with `--gc-sections`, a program pays only for the functions it calls: the
+range matching and prefix parsing are about a kilobyte of it on a Cortex-M0+.
 
 ## Development
 
