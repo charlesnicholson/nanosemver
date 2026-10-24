@@ -166,15 +166,17 @@ TEST_CASE("nsv_range_match: syntax errors") {
   for (char const *r : {
            // Empty.
            "", " ", "\t", "||", " || ", "1.0.0 ||", "|| 1.0.0", "1.0.0 || || 2.0.0",
-           // Not a full version.
-           "1", "1.2", ">=1.2", "<1", "1.x", "1.2.x", "*", "x", "1.2.3.4", "01.2.3",
-           "1.2.03", "1.2.3-", "1.2.3+", "1.2.3-01",
+           // Not a version, whole or partial.
+           "1.2.3.4", "01.2.3", "1.2.03", "1.2.3-", "1.2.3+", "1.2.3-01", "1.", "1.2.",
+           ".1", "1..2", "01", "1.02", "01.x", "1.2x", "1x", "x1", "xx", "**", "x.1",
+           "*.1.2", "1.x.3", "1.2.x.x", "1.2.3.x", "1.2-beta", "1.x-beta", "1.2+b",
+           "1.2.x-rc", "*-0", "-1", "+", ".", "1.2.3 .x",
            // Operators npm does not have, or only in loose forms.
-           "==1.2.3", "!=1.2.3", "!1.2.3", "=>1.2.3", "=<1.2.3", "<>1.2.3", ">>1.2.3",
-           "<<1.2.3", "~>1.2.3", "~=1.2.3", "^=1.2.3", "^^1.2.3", "~^1.2.3", "> =1.2.3",
-           "< =1.2.3", "v1.2.3", "=v1.2.3", ">=v1.2.3",
+           "==1.2.3", "!1.2.3", "! =1.2.3", "!==1.2.3", "=!1.2.3", "=>1.2.3", "=<1.2.3",
+           "<>1.2.3", ">>1.2.3", "<<1.2.3", "~>1.2.3", "~=1.2.3", "^=1.2.3", "^^1.2.3",
+           "~^1.2.3", "> =1.2.3", "< =1.2.3", "v1.2.3", "=v1.2.3", ">=v1.2.3", "!",
            // An operator with no version.
-           "<", "<=", ">", ">=", "=", "^", "~", ">=1.0.0 <", "1.0.0 || >=",
+           "<", "<=", ">", ">=", "=", "^", "~", "!=", ">=1.0.0 <", "1.0.0 || >=",
            // Separators npm does not have.
            ">=1.0.0, <2.0.0", ">=1.0.0,<2.0.0", ">=1.0.0 && <2.0.0", "1.0.0 | 2.0.0",
            "1.0.0|2.0.0", "1.0.0 ||| 2.0.0", "1.0.0 or 2.0.0", "1.0.0\n", "1.0.0\r",
@@ -182,9 +184,9 @@ TEST_CASE("nsv_range_match: syntax errors") {
            // Comparators must be separated.
            ">=1.0.0<2.0.0", "1.0.0=2.0.0", "1.0.0^2.0.0", "1.0.0~2.0.0",
            // Hyphen ranges.
-           "1.0.0 - 2.0.0", "1.0.0 -2.0.0",
+           "1.0.0 - 2.0.0", "1.0.0 -2.0.0", "1.2 - 2.3", "1 - 2",
            // Trailing junk.
-           ">=1.0.0 x", "1.0.0 ,", "1.0.0 |" }) {
+           ">=1.0.0 y", ">=1.0.0 v", "1.0.0 ,", "1.0.0 |" }) {
     INFO("\"", r, "\"");
     REQUIRE(match(r, "1.0.0") == NSV_RET_ERR_SYNTAX);
     REQUIRE(match(r, "1.0.0", NSV_RANGE_EXCLUDE_PRE) == NSV_RET_ERR_SYNTAX);
@@ -192,9 +194,10 @@ TEST_CASE("nsv_range_match: syntax errors") {
 }
 
 TEST_CASE("nsv_range_match: a syntax error anywhere, even after a match") {
-  REQUIRE(match("1.0.0 || 2.0", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("1.0.0 || 2.0.", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("* || 1.x.3", "1.0.0") == NSV_RET_ERR_SYNTAX);
   REQUIRE(match("1.0.0 || ", "1.0.0") == NSV_RET_ERR_SYNTAX);
-  REQUIRE(match("<1.0.0 >=1.0.0 x", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("<1.0.0 >=1.0.0 y", "1.0.0") == NSV_RET_ERR_SYNTAX);
 }
 
 TEST_CASE("nsv_range_match: versions beyond the limits") {
@@ -207,7 +210,14 @@ TEST_CASE("nsv_range_match: versions beyond the limits") {
   // The first such error is the one returned; a syntax error anywhere beats them all.
   REQUIRE(match("<4294967296.0.0 || " + huge, "1.0.0") == NSV_RET_ERR_OVERFLOW);
   REQUIRE(match(huge + " <4294967296.0.0", "1.0.0") == NSV_RET_ERR_TOO_LONG);
-  REQUIRE(match("<4294967296.0.0 || 1.2", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("<4294967296.0.0 || 1.2.", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  // Partial versions too.
+  REQUIRE(match(">=4294967296", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("1.4294967296.x", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("^" + std::string(100, '9'), "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("1.x || <4294967296", "1.0.0") == NSV_RET_ERR_OVERFLOW);
+  REQUIRE(match("4294967296.x.1", "1.0.0") == NSV_RET_ERR_SYNTAX);
+  REQUIRE(match("4294967295.4294967295.x", "4294967295.4294967295.4294967295") == 1);
   REQUIRE(match(huge + "_", "1.0.0") == NSV_RET_ERR_SYNTAX);
   // A long range is fine as long as each version fits.
   std::string many;
@@ -293,6 +303,146 @@ TEST_CASE("nsv_range_match: as npm answers, and where it differs") {
   }
 }
 
+TEST_CASE("nsv_range_match: partial versions and wildcards, as npm answers") {
+  // node-semver 7.8.5's satisfies(), with includePrerelease and without.
+  match_case const cases[] = {
+    { "1.2", "1.2.0-beta", 1, 0 },
+    { "1.2", "1.2.0", 1, 1 },
+    { "1.2", "1.2.99", 1, 1 },
+    { "1.2", "1.3.0-0", 0, 0 },
+    { "1.2", "1.1.9", 0, 0 },
+    { "1", "1.0.0-0", 1, 0 },
+    { "1", "1.99.0", 1, 1 },
+    { "1", "2.0.0-0", 0, 0 },
+    { "1.x", "1.5.0", 1, 1 },
+    { "1.2.x", "1.2.7", 1, 1 },
+    { "1.X", "1.5.0", 1, 1 },
+    { "1.*", "1.5.0", 1, 1 },
+    { "1.2.*", "1.3.0", 0, 0 },
+    { "*", "0.0.0-0", 1, 0 },
+    { "*", "9.9.9", 1, 1 },
+    { "x", "1.0.0-rc", 1, 0 },
+    { "X.X.X", "2.0.0", 1, 1 },
+    { "*.*", "2.0.0", 1, 1 },
+    { "=1.2", "1.2.3", 1, 1 },
+    { "=1", "2.0.0", 0, 0 },
+    { ">=1.2", "1.2.0-beta", 1, 0 },
+    { ">=1.2", "1.2.0", 1, 1 },
+    { ">=1.2", "1.1.9", 0, 0 },
+    { ">=1", "1.0.0", 1, 1 },
+    { ">=1", "0.9.9", 0, 0 },
+    { ">1.2", "1.2.99", 0, 0 },
+    { ">1.2", "1.3.0-0", 1, 0 },
+    { ">1.2", "1.3.0", 1, 1 },
+    { ">1", "2.0.0-rc", 1, 0 },
+    { ">1", "1.99.99", 0, 0 },
+    { "<1.2", "1.2.0-0", 0, 0 },
+    { "<1.2", "1.1.99", 1, 1 },
+    { "<1", "1.0.0-0", 0, 0 },
+    { "<1", "0.99.0", 1, 1 },
+    { "<=1.2", "1.2.99", 1, 1 },
+    { "<=1.2", "1.3.0-0", 0, 0 },
+    { "<=1", "1.9.9", 1, 1 },
+    { "<=1", "2.0.0-0", 0, 0 },
+    { "~1.2", "1.2.0-0", 1, 0 },
+    { "~1.2", "1.2.9", 1, 1 },
+    { "~1.2", "1.3.0-0", 0, 0 },
+    { "~1", "1.9.9", 1, 1 },
+    { "~1", "2.0.0-0", 0, 0 },
+    { "~0", "0.9.0", 1, 1 },
+    { "~0", "1.0.0", 0, 0 },
+    { "^1.2", "1.2.0-0", 1, 0 },
+    { "^1.2", "1.9.9", 1, 1 },
+    { "^1.2", "2.0.0-0", 0, 0 },
+    { "^0.2", "0.2.9", 1, 1 },
+    { "^0.2", "0.3.0-0", 0, 0 },
+    { "^0.0", "0.0.9", 1, 1 },
+    { "^0.0", "0.1.0", 0, 0 },
+    { "^1", "1.9.9", 1, 1 },
+    { "^0", "0.9.9", 1, 1 },
+    { "^0", "1.0.0", 0, 0 },
+    { "^1.x", "1.0.0", 1, 1 },
+    { "^0.x", "0.5.0", 1, 1 },
+    { "~1.x", "1.5.0", 1, 1 },
+    { ">*", "1.0.0", 0, 0 },
+    { "<*", "1.0.0", 0, 0 },
+    { ">=*", "1.0.0-beta", 1, 0 },
+    { "<=*", "1.0.0", 1, 1 },
+    { "^*", "1.0.0", 1, 1 },
+    { "~*", "1.0.0", 1, 1 },
+    { "=*", "1.0.0", 1, 1 },
+    { ">=1.2 <1.2.0-rc.5", "1.2.0-beta", 1, 0 },
+    { "1.2 >=1.2.0-alpha", "1.2.0-beta", 1, 0 },
+    { ">1.2 >=1.3.0-a", "1.3.0-b", 1, 0 },
+    { "^1.2 >=1.2.0-0", "1.2.0-1", 1, 0 },
+    { "~1.2 <=1.2.5-z", "1.2.5-a", 1, 1 },
+    { "<1.3 >=1.2.9-a", "1.2.9-b", 1, 1 },
+    { "1.x || >=2.0.0-0", "2.0.0-rc", 1, 1 },
+    { ">=1.2 <2", "1.9.9", 1, 1 },
+    { ">1.4294967295", "2.0.0", 1, 1 },
+    { ">1.4294967295", "1.4294967295.7", 0, 0 },
+    { ">=4294967295", "4294967295.0.0", 1, 1 },
+  };
+  for (match_case const &c : cases) {
+    check(c);
+  }
+}
+
+TEST_CASE("nsv_range_match: partial versions past UINT32_MAX") {
+  match_case const cases[] = {
+    // >X is >=X+1, carrying into the next number up; past the top, nothing is above.
+    { ">1.4294967295", "2.0.0", 1, 1 },
+    { ">1.4294967295", "1.4294967295.4294967295", 0, 0 },
+    { ">4294967295", "4294967295.4294967295.4294967295", 0, 0 },
+    { ">4294967295.4294967295", "4294967295.4294967295.4294967295", 0, 0 },
+    { ">4294967294.4294967295", "4294967295.0.0", 1, 1 },
+    // <=X is <X+1, so past the top, everything is below.
+    { "<=4294967295", "4294967295.4294967295.4294967295", 1, 1 },
+    { "<=4294967295.4294967295", "4294967295.4294967295.0-rc", 1, 0 },
+    { "<=1.4294967295", "2.0.0-0", 0, 0 },
+    { "<=1.4294967295", "1.4294967295.9", 1, 1 },
+    { "^4294967295", "4294967295.7.7", 1, 1 },
+    { "~4294967295.4294967295", "4294967295.4294967295.1", 1, 1 },
+    { "4294967295.x", "4294967295.0.0-0", 1, 0 },
+  };
+  for (match_case const &c : cases) {
+    check(c);
+  }
+}
+
+TEST_CASE("nsv_range_match: !=") {
+  match_case const cases[] = {
+    { "!=1.2.3", "1.2.3", 0, 0 },
+    { "!=1.2.3", "1.2.3+b", 0, 0 },
+    { "!=1.2.3", "1.2.4", 1, 1 },
+    { "!=1.2.3", "1.2.2", 1, 1 },
+    { "!=1.2.3", "1.2.3-rc", 1, 0 },
+    { "!= 1.2.3", "1.2.4", 1, 1 },
+    { ">=1.2.0 !=1.4.1 <2.0.0", "1.4.1", 0, 0 },
+    { ">=1.2.0 !=1.4.1 <2.0.0", "1.4.2", 1, 1 },
+    { ">=1.2 !=1.4.1 <2", "1.4.0", 1, 1 },
+    // A pre-release: excluded, never let in under the npm rule.
+    { "!=1.2.3-rc.1", "1.2.3-rc.1", 0, 0 },
+    { "!=1.2.3-rc.1", "1.2.3-rc.2", 1, 0 },
+    { ">=1.2.3-rc.0 !=1.2.3-rc.1", "1.2.3-rc.2", 1, 1 },
+    { ">=1.2.3-rc.0 !=1.2.3-rc.1", "1.2.3-rc.1", 0, 0 },
+    // A partial version: off the whole line, its pre-releases too.
+    { "!=1.4", "1.4.0", 0, 0 },
+    { "!=1.4", "1.4.99", 0, 0 },
+    { "!=1.4", "1.4.0-0", 0, 0 },
+    { "!=1.4", "1.5.0", 1, 1 },
+    { "!=1.4", "1.3.9", 1, 1 },
+    { "!=1", "1.9.9", 0, 0 },
+    { "!=1.x", "2.0.0", 1, 1 },
+    { "!=*", "1.0.0", 0, 0 },
+    { ">=1 !=1.4 <2", "1.4.5", 0, 0 },
+    { ">=1 !=1.4 <2", "1.5.0", 1, 1 },
+  };
+  for (match_case const &c : cases) {
+    check(c);
+  }
+}
+
 TEST_CASE("nsv_range_match: every byte between comparators and before a version") {
   for (int c = 0; c < 256; ++c) {
     char const ch = static_cast<char>(c);
@@ -309,19 +459,21 @@ TEST_CASE("nsv_range_match: every byte between comparators and before a version"
   }
 }
 
-TEST_CASE("nsv_range_match: every range of up to three comparators") {
-  // Each comparator is an operator and a version from these; between two comparators
-  // is AND or OR. Every such range is checked against every test version, with the
-  // answer built from the range's own structure: OR over sets of AND over comparators,
-  // where what a single comparator answers comes from the reference.
-  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~" };
-  static char const *const vers[] = { "0.0.3", "0.2.3", "1.2.3", "1.2.3-rc.1", "2.0.0-0" };
-  static char const *const tests[] = { "0.0.2",     "0.0.3",      "0.0.3-rc", "0.0.4",
-                                       "0.2.3-beta", "0.2.9",     "0.3.0",    "1.2.2",
-                                       "1.2.3-rc.1", "1.2.3-rc.2", "1.2.3",    "1.9.0-rc",
-                                       "1.9.0",      "2.0.0-0",   "2.0.0-rc.1", "2.0.0" };
-  constexpr size_t no = std::size(ops), nv = std::size(vers), nt = std::size(tests);
-  constexpr size_t nc = no * nv;  // distinct comparators
+namespace {
+
+// Every range of up to max_k comparators drawn from ops x vers, with AND or OR between
+// each two, checked against every test version in both modes. The answer is built from
+// the range's own structure, OR over sets of AND over comparators, from what each
+// comparator alone answers according to the reference.
+void every_range(std::vector<char const *> const &ops, std::vector<char const *> const &vers,
+                 size_t max_k) {
+  static char const *const tests[] = {
+    "0.0.0-rc",  "0.0.0",     "0.0.2",      "0.0.3-rc",   "0.0.3", "0.0.4",
+    "0.2.3-beta", "0.2.9",    "0.3.0",      "0.9.9",      "1.0.0-0", "1.0.0",
+    "1.2.0-beta", "1.2.2",    "1.2.3-rc.1", "1.2.3-rc.2", "1.2.3", "1.2.9",
+    "1.3.0-0",   "1.9.0-rc",  "1.9.0",      "2.0.0-0",    "2.0.0-rc.1", "2.0.0",
+  };
+  size_t const nv = vers.size(), nt = std::size(tests), nc = ops.size() * nv;
 
   std::vector<std::string> const tstr(std::begin(tests), std::end(tests));
   std::vector<nsv_semver_t> tv;
@@ -330,35 +482,34 @@ TEST_CASE("nsv_range_match: every range of up to three comparators") {
     tv.push_back(nsv_test::parse_ok(tstr[t]));
     REQUIRE(ref::parse(tstr[t], &trv[t]) == ref::status::ok);
   }
-  // sat[c][t]: comparator c alone admits test t, pre-releases ranked plainly. pre[c][t]:
-  // c's version has a pre-release on t's MAJOR.MINOR.PATCH.
-  std::vector<std::vector<bool>> sat(nc, std::vector<bool>(nt)), pre(nc, std::vector<bool>(nt));
-  for (size_t c = 0; c < nc; ++c) {
-    ref::version cv;
-    REQUIRE(ref::parse(vers[c % nv], &cv) == ref::status::ok);
-    for (size_t t = 0; t < nt; ++t) {
-      bool m = false;
-      REQUIRE(ref::range_match(std::string(ops[c / nv]) + vers[c % nv], trv[t], false, &m) ==
-              ref::status::ok);
-      sat[c][t] = m;
-      pre[c][t] = cv.has_pre && (cv.major == trv[t].major) && (cv.minor == trv[t].minor) &&
-                  (cv.patch == trv[t].patch);
+  // sat[m][c][t]: comparator c alone admits test t, in mode m (1 excluding pre-releases).
+  // names[c][t]: c names a pre-release on t's MAJOR.MINOR.PATCH.
+  std::vector<std::vector<bool>> sat[2], names(nc, std::vector<bool>(nt));
+  for (int m = 0; m < 2; ++m) {
+    sat[m].assign(nc, std::vector<bool>(nt));
+    for (size_t c = 0; c < nc; ++c) {
+      std::string const term = std::string(ops[c / nv]) + vers[c % nv];
+      for (size_t t = 0; t < nt; ++t) {
+        bool pass = false, named = false;
+        REQUIRE(ref::term_match(term, trv[t], m == 1, &pass, &named) == ref::status::ok);
+        sat[m][c][t] = pass;
+        names[c][t] = named;
+      }
     }
   }
 
   static nsv_test::guarded g;
   static char const *const ands[] = { " ", "\t", "  ", " \t " };
   static char const *const ors[] = { "||", " || ", "\t||", "||  " };
-  size_t ranges = 0;
-  for (size_t k = 1; k <= 3; ++k) {
+  for (size_t k = 1; k <= max_k; ++k) {
     size_t combos = 1;
     for (size_t i = 0; i < k; ++i) {
       combos *= nc;
     }
     for (size_t combo = 0; combo < combos; ++combo) {
       size_t cs[3];
-      for (size_t i = 0, m = combo; i < k; ++i, m /= nc) {
-        cs[i] = m % nc;
+      for (size_t i = 0, rest = combo; i < k; ++i, rest /= nc) {
+        cs[i] = rest % nc;
       }
       for (unsigned bounds = 0; bounds < (1u << (k - 1)); ++bounds) {
         // Spacing varies with the indices, so every kind turns up everywhere.
@@ -374,25 +525,23 @@ TEST_CASE("nsv_range_match: every range of up to three comparators") {
         }
         r += (vary % 7 == 0) ? "\t" : "";
         char const *const pr = g.place(r);
-        ++ranges;
 
         for (size_t t = 0; t < nt; ++t) {
-          for (bool excl : { false, true }) {
+          for (int m = 0; m < 2; ++m) {
             bool any = false, all = true, pre_ok = false;
             for (size_t i = 0; i < k; ++i) {
-              all = all && sat[cs[i]][t];
-              pre_ok = pre_ok || pre[cs[i]][t];
-              bool const last = (i + 1 == k) || ((bounds >> i) & 1u);
-              if (last) {
-                any = any || (all && (!excl || !trv[t].has_pre || pre_ok));
+              all = all && sat[m][cs[i]][t];
+              pre_ok = pre_ok || names[cs[i]][t];
+              if ((i + 1 == k) || ((bounds >> i) & 1u)) {
+                any = any || (all && (!m || !trv[t].has_pre || pre_ok));
                 all = true;
                 pre_ok = false;
               }
             }
-            int const got =
-                nsv_range_match(pr, r.size(), &tv[t], excl ? unsigned(NSV_RANGE_EXCLUDE_PRE) : 0u);
+            unsigned const flags = m ? unsigned(NSV_RANGE_EXCLUDE_PRE) : 0u;
+            int const got = nsv_range_match(pr, r.size(), &tv[t], flags);
             if (got != int(any)) {
-              INFO("\"", r, "\" against ", tstr[t], excl ? ", excluding pre-releases" : "");
+              INFO("\"", r, "\" against ", tstr[t], m ? ", excluding pre-releases" : "");
               REQUIRE(got == int(any));
             }
           }
@@ -400,7 +549,19 @@ TEST_CASE("nsv_range_match: every range of up to three comparators") {
       }
     }
   }
-  REQUIRE(ranges == nc + (nc * nc * 2) + (nc * nc * nc * 4));
+}
+
+}  // namespace
+
+TEST_CASE("nsv_range_match: every range of up to three comparators") {
+  every_range({ "", "=", "<", "<=", ">", ">=", "^", "~" },
+              { "0.0.3", "0.2.3", "1.2.3", "1.2.3-rc.1", "2.0.0-0" }, 3);
+}
+
+TEST_CASE("nsv_range_match: every range of up to two comparators, partial versions too") {
+  every_range({ "", "=", "<", "<=", ">", ">=", "^", "~", "!=" },
+              { "0.0.3", "1.2.3", "1.2.3-rc.1", "1.2", "1", "1.x", "*", "0.2", "0", "0.0" },
+              2);
 }
 
 TEST_CASE("nsv_range_match: every byte at every position, and every truncation") {

@@ -14,9 +14,10 @@ m0 cmp/pre-random         168.6
 m0 cmp/equal-full         157.4
 m0 cmp/equal-long         286.7
 m0 prefix/mix             461.3
-m0 range/mix              900.7
-m0 range/mix-excl         900.7
-m0 range/or4             4605.9
+m0 range/mix              933.9
+m0 range/mix-excl         933.8
+m0 range/or4             4716.8
+m0 range/partial          728.3
 m0 format/mix             322.3
 m0 format/long            817.6
 m0 format-len/mix          92.2
@@ -33,9 +34,10 @@ m4 cmp/pre-random         152.0
 m4 cmp/equal-full         163.7
 m4 cmp/equal-long         317.7
 m4 prefix/mix             486.1
-m4 range/mix              933.4
-m4 range/mix-excl         933.3
-m4 range/or4             4747.0
+m4 range/mix              950.2
+m4 range/mix-excl         950.2
+m4 range/or4             4778.4
+m4 range/partial          673.4
 m4 format/mix             239.8
 m4 format/long            590.1
 m4 format-len/mix         102.9

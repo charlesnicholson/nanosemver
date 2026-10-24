@@ -169,6 +169,12 @@ std::string near_length_limit(rng &r) {
   return s;
 }
 
+// Any one element of an array.
+template <typename A>
+auto any(rng &r, A const &a) {
+  return a[r.below(static_cast<std::uint32_t>(std::size(a)))];
+}
+
 // n + delta for a small decimal string, else n unchanged.
 std::string bump(std::string const &n, int delta) {
   if (n.empty() || (n.size() > 9) || (n.find_first_not_of("0123456789") != std::string::npos)) {
@@ -178,11 +184,35 @@ std::string bump(std::string const &n, int delta) {
   return (v < 0) ? n : std::to_string(v);
 }
 
-// A comparator's version: v itself, v's neighbours and zeros, or anything at all.
+// A partial version near p: its first one or two numbers, nudged, then wildcards or
+// nothing; or a wildcard alone; now and then malformed.
+std::string partial_near(rng &r, parts const &p) {
+  static char const *const wild[] = { "x", "X", "*" };
+  static char const *const bad[] = { "1.x.3", "x.1", "1.", "01", "1.2-beta", "1.xx", ".1" };
+  switch (r.below(12)) {
+    case 0: return any(r, wild);
+    case 1: return any(r, bad);
+    case 2: return std::string(any(r, wild)) + "." + any(r, wild);
+    default: break;
+  }
+  std::string s = r.chance(20) ? bump(p.major, r.chance(50) ? 1 : -1) : p.major;
+  if (r.chance(60)) {
+    s += "." + (r.chance(20) ? bump(p.minor, r.chance(50) ? 1 : -1) : p.minor);
+  }
+  for (std::uint32_t i = 0, n = r.below(3); i < n; ++i) {
+    s += std::string(".") + any(r, wild);
+  }
+  return s;
+}
+
+// A comparator's version: v itself, v's neighbours and zeros, a partial version, or
+// anything at all.
 std::string near_version(rng &r, parts const &v) {
-  switch (r.below(8)) {
+  switch (r.below(10)) {
     case 0: return gen_version(r);
     case 1: return v.str();
+    case 2:
+    case 3: return partial_near(r, r.chance(70) ? v : tweak(r, v));
     default: {
       parts p = r.chance(50) ? v : tweak(r, v);
       p.has_pre = p.has_pre && r.chance(50);  // most bounds are releases
@@ -220,20 +250,19 @@ parts range_parts(rng &r) {
 // A range around v: mostly npm's grammar, sometimes with operators, separators and
 // spacing from other grammars or from nowhere.
 std::string gen_range(rng &r, parts const &v) {
-  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~" };
-  static char const *const bad_ops[] = { "==", "!=", "=>", "~>", "~=", "^=", "<<", "v", "*",
-                                         "-", "!", "|" };
+  static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~", "!=" };
+  static char const *const bad_ops[] = { "==", "=>", "~>", "~=", "^=", "<<", "v", "!", "! =",
+                                         "-", "|" };
   static char const *const gaps[] = { " ", "  ", "\t" };
   static char const *const ands[] = { " ", "  ", "\t", " \t " };
   static char const *const bad_ands[] = { "", ",", ", ", "\v", "&&", " - " };
   static char const *const ors[] = { "||", " || ", "  ||  ", " ||", "|| " };
   static char const *const bad_ors[] = { "|", " | ", "|||", " or ", "|| ||" };
-  auto any = [&r](auto const &a) { return a[r.below(static_cast<std::uint32_t>(std::size(a)))]; };
-  auto mostly = [&r, &any](auto const &good, auto const &bad) {
-    return r.chance(95) ? any(good) : any(bad);
+  auto mostly = [&r](auto const &good, auto const &bad) {
+    return r.chance(95) ? any(r, good) : any(r, bad);
   };
 
-  std::string s = r.chance(10) ? any(gaps) : "";
+  std::string s = r.chance(10) ? any(r, gaps) : "";
   for (std::uint32_t i = 0, sets = 1 + r.below(3); i < sets; ++i) {
     if (i) {
       s += mostly(ors, bad_ors);
@@ -243,12 +272,12 @@ std::string gen_range(rng &r, parts const &v) {
         s += mostly(ands, bad_ands);
       }
       s += mostly(ops, bad_ops);
-      s += r.chance(10) ? any(gaps) : "";
+      s += r.chance(10) ? any(r, gaps) : "";
       s += near_version(r, v);
     }
   }
   if (r.chance(10)) {
-    s += any(gaps);
+    s += any(r, gaps);
   }
   if (r.chance(5)) {
     mutate(r, s);

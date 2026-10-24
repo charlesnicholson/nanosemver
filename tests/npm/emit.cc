@@ -1,8 +1,9 @@
 // Writes the cases for tests/npm/judge.js, one JSON array per line:
 //   [range, version, nsv_range_match(range, version, 0), ...(NSV_RANGE_EXCLUDE_PRE)]
 // for every range nanosemver accepts: the corpus ranges against the corpus versions,
-// every range of up to two comparators built from a few operators and versions against
-// versions around them, and generated ranges from the fuzz generator.
+// every range of up to two comparators built from a few operators and versions, whole
+// and partial, against versions around them, and generated ranges from the fuzz
+// generator. Ranges with !=, which npm has not, go too; the judge counts them aside.
 //
 //   nsv_npm_emit [generated-count [seed]]
 #include "../corpus.h"
@@ -63,11 +64,11 @@ int main(int argc, char **argv) {
 
   static char const *const ops[] = { "", "=", "<", "<=", ">", ">=", "^", "~" };
   static char const *const vers[] = { "0.0.0", "0.0.3", "0.2.3", "1.2.3", "1.2.3-rc.1",
-                                      "2.0.0-0" };
+                                      "2.0.0-0", "1.2", "1", "1.x", "*", "0.2", "0", "0.0" };
   static char const *const tests[] = { "0.0.0-rc", "0.0.0", "0.0.3-rc", "0.0.3", "0.0.4",
-                                       "0.2.3-beta", "0.2.9", "0.3.0", "1.2.3-rc.1",
-                                       "1.2.3-rc.2", "1.2.3", "1.9.0-rc", "2.0.0-rc.1",
-                                       "2.0.0" };
+                                       "0.2.3-beta", "0.2.9", "0.3.0", "1.2.0-beta",
+                                       "1.2.3-rc.1", "1.2.3-rc.2", "1.2.3", "1.3.0-0",
+                                       "1.9.0-rc", "2.0.0-rc.1", "2.0.0" };
   for (char const *o1 : ops) {
     for (char const *v1 : vers) {
       std::string const c1 = std::string(o1) + v1;

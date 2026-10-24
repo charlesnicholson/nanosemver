@@ -88,30 +88,38 @@ int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b);
 /* nsv_range_match flags. */
 enum {
   /* npm's default: a version with a pre-release satisfies a comparator set only if a
-     comparator in it has a pre-release on the same MAJOR.MINOR.PATCH. So >=1.0.0 <2.0.0
-     rejects 1.5.0-beta, and >=1.5.0-beta <2.0.0 admits 1.5.0-rc.1 but not 1.6.0-rc.1. */
+     comparator in it has a pre-release on the same MAJOR.MINOR.PATCH (!= and partial
+     versions never do). So >=1.0.0 <2.0.0 rejects 1.5.0-beta, and >=1.5.0-beta <2.0.0
+     admits 1.5.0-rc.1 but not 1.6.0-rc.1. */
   NSV_RANGE_EXCLUDE_PRE = 1,
 };
 
-/* Whether v satisfies the range in s[0, len), e.g. ">=1.2.0 <1.4.0 || ^2.1.0". No
-   standard defines ranges; this grammar is a subset of npm's
-   (https://github.com/npm/node-semver#range-grammar), and npm reads every range it
-   accepts the same way:
+/* Whether v satisfies the range in s[0, len), e.g. ">=1.2 <1.4 || ^2.1.0". No standard
+   defines ranges; this grammar is npm's (https://github.com/npm/node-semver#range-grammar)
+   without hyphen ranges, plus !=, and npm reads every range of it the same way:
      range       comparator sets separated by "||": v satisfies any one of them
      set         comparators separated by spaces or tabs: v satisfies all of them
-     comparator  an operator, optional spaces, and a full semver 2.0.0 version V
+     comparator  an operator, optional spaces, and a semver 2.0.0 version V
        <V <=V >V >=V   by nsv_cmp precedence
        V =V            equal precedence, so build metadata never matters
+       !=V             not equal; not npm's, but Neargye's, PEP 440's and Composer's
        ~V              >=V, with the same MAJOR.MINOR: ~1.2.3 is >=1.2.3 <1.3.0-0
        ^V              >=V, with the same leftmost nonzero of MAJOR.MINOR.PATCH:
                        ^1.2.3 is >=1.2.3 <2.0.0-0, ^0.2.3 is >=0.2.3 <0.3.0-0, and
                        ^0.0.3 is >=0.0.3 <0.0.4-0
-   No partial versions (1.2, 1.x, *), hyphen ranges, leading 'v', or other grammars'
-   operators (==, !=, ~>, ~=); an empty range is a syntax error.
+     or a partial version P, up to three numbers then wildcards (x, X or *), with no
+     pre-release or build, which stands for its whole line, pre-releases and all:
+       P =P            1.2 and 1.2.x are >=1.2.0-0 <1.3.0-0, and * is everything
+       <P <=P >P >=P   <1.2 is <1.2.0-0, <=1.2 is <1.3.0-0, >1.2 is >=1.3.0-0
+       !=P             off the line: !=1.4 is <1.4.0-0 or >=1.5.0-0
+       ~P ^P           ~1 and ^1.2 are >=1.0.0-0 <2.0.0-0 and >=1.2.0-0 <2.0.0-0
+   No hyphen ranges, leading 'v', or other grammars' operators (==, ~>, ~=); an empty
+   range is a syntax error.
    By default a pre-release is just a version ranking below its release, as with npm's
    includePrerelease, so >=1.0.0 <2.0.0 admits 2.0.0-rc.1: write <2.0.0-0 to stop below
-   every 2.0.0 pre-release, as ^ and ~ do. NSV_RANGE_EXCLUDE_PRE is npm's default, but for
-   npm reading >=0.0.0 (and ^0.0.0's and ~0.0.0's lower bound) as *.
+   every 2.0.0 pre-release, as ^ and ~ do. NSV_RANGE_EXCLUDE_PRE is npm's default, under
+   which a partial version's lower bound is its .0 release (>=1.2 is >=1.2.0). It differs
+   only where npm reads >=0.0.0 as * and a set of * as the whole range.
    Returns 1 if v satisfies the range and 0 if not, or ERR_ARG / ERR_SYNTAX, or
    ERR_OVERFLOW / ERR_TOO_LONG if a version in the range is beyond nanosemver's limits.
    The whole range is always parsed, so a malformed one is ERR_SYNTAX however v compares. */

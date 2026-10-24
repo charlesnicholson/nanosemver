@@ -56,3 +56,7 @@ dkms.conf
 .envy/
 .envy-cache-*
 build/
+
+# Python
+__pycache__/
+*.py[cod]

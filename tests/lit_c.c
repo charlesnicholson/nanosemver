@@ -65,6 +65,11 @@ int lit_c_range_check(void) {
       (nsv_range_match(range, sizeof(range) - 1, &k_bare, 0) != 0)) {
     return 0;
   }
+  if ((nsv_range_match(">=1.2 !=1.3.1 <2", 16, &k_bare, 0) != 0) ||
+      (nsv_range_match("1.x || 2.*", 10, &k_bare, 0) != 1) ||
+      (nsv_range_match("^1.4", 4, &k_full, NSV_RANGE_EXCLUDE_PRE) != 0)) {
+    return 0;
+  }
   if (nsv_parse(&v, version, sizeof(version) - 1) != NSV_RET_OK) {
     return 0;
   }

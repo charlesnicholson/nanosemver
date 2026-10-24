@@ -206,12 +206,31 @@ def range_or(r):
     return s
 
 
+def range_partial(r):
+    k = r.below(100)
+    a = num(r, True)
+    b = num(r, False)
+    if k < 30:
+        return "^" + a + "." + b
+    if k < 45:
+        return "~" + a + "." + b
+    if k < 60:
+        return a + ".x"
+    if k < 80:
+        s = ">=" + a + "." + b
+        return s + " <" + num(r, True)
+    if k < 90:
+        s = ">=" + a
+        return s + " !=" + core(r)
+    return "*"
+
+
 PARSE_SETS = [("core", 1, core), ("pre", 2, core_pre), ("build", 3, core_build),
               ("full", 4, core_pre_build), ("long", 5, long_one), ("mix", 6, mix_one),
               ("invalid", 7, invalid_one)]
 # Corpora for the functions a baseline may predate; bench.cc's seeds.
 OTHER_SETS = [("prefix/mix", 10, prefix_one), ("range/mix", 11, range_one),
-              ("range/or4", 12, range_or)]
+              ("range/or4", 12, range_or), ("range/partial", 13, range_partial)]
 EXCLUDE_PRE = 1
 
 
@@ -435,6 +454,7 @@ def run(m, n, flt):
         range_set("range/mix", 11, range_one, 0)
         range_set("range/mix-excl", 11, range_one, EXCLUDE_PRE)
         range_set("range/or4", 12, range_or, 0)
+        range_set("range/partial", 13, range_partial, 0)
 
     fmt_set("format/mix", mix, False)
     fmt_set("format/long", parsed["long"], False)

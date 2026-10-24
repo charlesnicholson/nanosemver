@@ -95,37 +95,45 @@ and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` an
 
 There is no range standard: semver.org defines versions and their precedence, nothing
 more. The nearest thing is npm's [grammar](https://github.com/npm/node-semver#range-grammar),
-which Composer, Conan and Neargye's C++ semver follow closely too, so
-`nsv_range_match` takes a subset of it, and npm reads every range it accepts the same
+which Composer, Conan and Neargye's C++ semver follow closely too, so `nsv_range_match`
+takes it, without hyphen ranges, plus `!=`, and npm reads every range it accepts the same
 way:
 
 | Range | Matches |
 |---|---|
 | `1.2.3`, `=1.2.3` | equal precedence: build metadata never matters |
 | `<1.2.3`, `<=1.2.3`, `>1.2.3`, `>=1.2.3` | by `nsv_cmp` precedence |
+| `!=1.2.3` | anything else; not npm's, but Neargye's, Python's (PEP 440) and Composer's |
 | `~1.2.3` | `>=1.2.3 <1.3.0-0`: the same `MAJOR.MINOR` |
 | `^1.2.3`, `^0.2.3`, `^0.0.3` | `>=1.2.3 <2.0.0-0`, `>=0.2.3 <0.3.0-0`, `>=0.0.3 <0.0.4-0`: the same leftmost nonzero number |
+| `1.2`, `1.2.x`, `1.x`, `*` | the whole line, pre-releases and all: `>=1.2.0-0 <1.3.0-0`; `*` is everything |
+| `>=1.2`, `>1.2`, `<1.2`, `<=1.2` | `>=1.2.0-0`, `>=1.3.0-0`, `<1.2.0-0`, `<1.3.0-0` |
+| `!=1.4` | off the 1.4 line |
+| `~1`, `^1.2`, `^0.2` | `>=1.0.0-0 <2.0.0-0`, `>=1.2.0-0 <2.0.0-0`, `>=0.2.0-0 <0.3.0-0` |
 | `A B` | both: comparators separated by spaces or tabs, with optional spaces after an operator |
 | `A \|\| B` | either |
 
-Versions are full semver versions. What npm has beyond that, partial versions (`1.2`,
-`1.x`, `*`) and hyphen ranges (`1.2.3 - 2.0.0`), is a syntax error, as are other
-grammars' spellings: Cargo and Python's PEP 440 separate comparators with commas and
-have no OR, PEP 440 writes `==`, `!=` and `~=`, and RubyGems `~>`. An empty range is an
-error too, and so is anything left over: the whole string must parse.
+A partial version is up to three numbers followed by wildcards (`x`, `X` or `*`), with no
+pre-release or build. Hyphen ranges (`1.2.3 - 2.0.0`) are a syntax error, as are other
+grammars' spellings: Cargo and Python separate comparators with commas and have no OR,
+Python writes `==` and `~=`, and RubyGems `~>`. An empty range is an error too, and so
+is anything left over: the whole string must parse.
 
 A pre-release is, by default, just a version ranking below its release, as with npm's
 `includePrerelease`. So `>=1.0.0 <2.0.0` admits `2.0.0-rc.1`; `<2.0.0-0` stops below
 every 2.0.0 pre-release, as `^` and `~` do. `NSV_RANGE_EXCLUDE_PRE` is npm's default
 instead: a pre-release matches a set only if a comparator in it has a pre-release of the
 same `MAJOR.MINOR.PATCH`, so `>=1.5.0-beta <2.0.0` admits `1.5.0-rc.1` but not
-`1.6.0-rc.1`. The one difference from npm is its own special case: it reads `>=0.0.0`,
-and the lower bound of `^0.0.0` and `~0.0.0`, as `*`, which lets 0.0.0's pre-releases
-past it.
+`1.6.0-rc.1`, and a partial version's lower bound is its `.0` release: `>=1.2` is
+`>=1.2.0`. `!=` and partial versions never let a pre-release in. The only differences
+from npm are its own special cases: it reads `>=0.0.0`, and the lower bound of `^0.0`,
+`~0.0.0`, `0.x` and the like, as `*`, which lets 0.0.0's pre-releases past it, and a set
+that is only `*` takes over the whole range, shutting out pre-releases the others name.
 
 `make npm-check` holds this to npm's own semver package: a million generated ranges,
-every range of up to two comparators over the operators, and the test corpus, against
-versions around their bounds.
+every range of up to two comparators over the operators and whole and partial versions,
+and the test corpus, against versions around their bounds. Ranges with `!=` are left to
+the reference tests.
 
 ## Performance
 
@@ -170,15 +178,16 @@ Cycles per call on Cortex-M at `-Os`, with the same inputs, counted in an emulat
 | `nsv_parse_prefix`, a version and what follows it | 461 | 486 |
 | `nsv_cmp`, the numbers decide | 24 | 26 |
 | `nsv_cmp`, the pre-release decides | 169 | 152 |
-| `nsv_range_match`, manifest-style (`^1.2.3`, `>=1.0.0 <2.0.0`) | 901 | 933 |
-| `nsv_range_match`, four bounded alternatives | 4606 | 4747 |
+| `nsv_range_match`, manifest-style (`^1.2.3`, `>=1.0.0 <2.0.0`) | 934 | 950 |
+| `nsv_range_match`, four bounded alternatives | 4717 | 4778 |
+| `nsv_range_match`, partial versions (`^1.2`, `1.x`, `>=1 !=1.4.1`) | 728 | 673 |
 | `nsv_format` | 322 | 240 |
-| `nanosemver.o`, bytes of code and data | 1852 | 1854 |
+| `nanosemver.o`, bytes of code and data | 2288 | 2288 |
 
 All of it is a ratchet: `make ratchet` fails if the code grows past `size-budget.mk` or
 any workload takes more cycles than `bench/cm/ratchet.txt` allows, and `make
 ratchet-update` lowers both to what the code now takes. `nsv_range_match` and
-`nsv_parse_prefix` are 588 of those bytes on a Cortex-M0+; built with
+`nsv_parse_prefix` are 1028 of those bytes on a Cortex-M0+; built with
 `-ffunction-sections` and linked with `--gc-sections`, a program pays only for the
 functions it calls.
 

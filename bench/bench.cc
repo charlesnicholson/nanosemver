@@ -328,6 +328,30 @@ std::string range_or(rng &r) {
   return s;
 }
 
+// Ranges written with partial versions and wildcards, and an exclusion.
+std::string range_partial(rng &r) {
+  uint32_t const k = r.below(100);
+  std::string const a = num(r, true);
+  std::string const b = num(r, false);
+  std::string s;
+  if (k < 30) {
+    s = "^" + a + "." + b;
+  } else if (k < 45) {
+    s = "~" + a + "." + b;
+  } else if (k < 60) {
+    s = a + ".x";
+  } else if (k < 80) {
+    s = ">=" + a + "." + b;
+    s += " <" + num(r, true);
+  } else if (k < 90) {
+    s = ">=" + a;
+    s += " !=" + core(r);
+  } else {
+    s = "*";
+  }
+  return s;
+}
+
 // Strings packed back to back in one buffer, the way a manifest or lockfile holds
 // them: no NULs, every parse bounded by its length alone.
 struct strings {
@@ -749,10 +773,12 @@ void run_all(config const &cfg) {
     strings const s_prefix = make_strings(10, prefix_one);
     strings const s_ranges = make_strings(11, range_one);
     strings const s_ors = make_strings(12, range_or);
+    strings const s_partial = make_strings(13, range_partial);
     prefix_workload(cfg, "prefix/mix", s_prefix);
     range_workload(cfg, "range/mix", s_ranges, v_mix, 0);
     range_workload(cfg, "range/mix-excl", s_ranges, v_mix, NSV_RANGE_EXCLUDE_PRE);
     range_workload(cfg, "range/or4", s_ors, v_mix, 0);
+    range_workload(cfg, "range/partial", s_partial, v_mix, 0);
   }
 
   fmt("format/mix", v_mix, false);
