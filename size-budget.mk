@@ -2,4 +2,4 @@
 # and `make ratchet-update` lowers these to what it now is. Raising one is a deliberate
 # edit. A toolchain bump moves sizes on its own.
 NSV_SIZE_M0_MAX := 2316
-NSV_SIZE_M4_MAX := 2310
+NSV_SIZE_M4_MAX := 2306

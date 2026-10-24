@@ -17,7 +17,7 @@ m0 prefix/mix             338.7
 m0 range/mix              794.8
 m0 range/mix-excl         794.6
 m0 range/or4             4045.0
-m0 range/partial          735.0
+m0 range/partial          733.3
 m0 format/mix             322.3
 m0 format/long            817.6
 m0 format-len/mix          92.2
@@ -37,7 +37,7 @@ m4 prefix/mix             296.2
 m4 range/mix              721.6
 m4 range/mix-excl         721.5
 m4 range/or4             3645.7
-m4 range/partial          657.5
+m4 range/partial          658.1
 m4 format/mix             239.8
 m4 format/long            590.1
 m4 format-len/mix         102.9

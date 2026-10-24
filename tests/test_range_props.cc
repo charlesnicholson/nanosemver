@@ -339,7 +339,8 @@ TEST_CASE("range properties: each operator is its definition") {
       }
       // Under npm's default a pre-release needs a comparator naming its line, and a
       // partial version's lower bound is the .0 release: >=1.2 <=1.2.0-z is >=1.2.0
-      // <=1.2.0-z, which 1.2.0-beta is not part of.
+      // <=1.2.0-z, which 1.2.0-beta is not part of. Except where >X carries: npm's
+      // >1.4294967295 is >=1.4294967296.0, below 2.0.0-0, so it stays >=2.0.0-0.
       std::string const named = " <=" + std::to_string(x.major) + "." +
                                 std::to_string(x.minor) + "." + std::to_string(x.patch) +
                                 "-zzz";
@@ -347,7 +348,9 @@ TEST_CASE("range properties: each operator is its definition") {
       REQUIRE(match(">=" + p + named, x, ex) == match(">=" + low + named, x, ex));
       REQUIRE(match(p + named, x, ex) == match(">=" + low + up + named, x, ex));
       if (!next.empty()) {
-        REQUIRE(match(">" + p + named, x, ex) == match(">=" + next + named, x, ex));
+        bool const carry = (l.k == 2) && (l.minor == 0xFFFFFFFFu);
+        REQUIRE(match(">" + p + named, x, ex) ==
+                match(">=" + next + (carry ? "-0" : "") + named, x, ex));
       }
     }
   }

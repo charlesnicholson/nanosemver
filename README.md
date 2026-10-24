@@ -222,7 +222,9 @@ compare lines:
 | `^0.0`, `^0` | `<0.1.0-0`, `<1.0.0-0` | `0.0.9`; `0.9.9` | `0.1.0`; `1.0.0` |
 
 At the top of the range, `>1.4294967295` carries into the next number, so it matches
-`2.0.0`, and nothing is above `>4294967295`.
+`2.0.0`, and nothing is above `>4294967295`. A carried bound keeps its `-0` even under
+`NSV_RANGE_EXCLUDE_PRE`: npm's is `>=1.4294967296.0`, which every 2.0.0 pre-release is
+above.
 
 `==`, `~=` and `~>` take no partial version, and `!=` one only with a wildcard: the
 grammars those operators come from read `==1.2` and `!=1.2` as 1.2.0, and `~=1.2` and

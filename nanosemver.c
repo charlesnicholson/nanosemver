@@ -280,10 +280,10 @@ int nsv_cmp(nsv_semver_t const *a, nsv_semver_t const *b) {
 /* A comparator's operator, packed: the nsv_cmp results it accepts as bits 0-2; how many
    of MAJOR.MINOR.PATCH v must share with the bound, from the left, as bits 3-5, where 4
    means ^'s leftmost nonzero (= and != say 3, which an equal version shares anyway);
-   NSV_HOW_NOT for != and NSV_HOW_PARTIAL for a partial version's bound, neither of which
-   ever lets a pre-release in; NSV_HOW_EXCL under NSV_RANGE_EXCLUDE_PRE; NSV_HOW_OVF from a
-   partial version too big; and NSV_HOW_WHOLE for ==, ~= and ~>, which take no partial
-   version. */
+   NSV_HOW_NOT to negate the test, for != and a partial version's <= (<=1.2 is not >1.2),
+   and NSV_HOW_PARTIAL for a partial version's bound, neither of which ever lets a
+   pre-release in; NSV_HOW_EXCL under NSV_RANGE_EXCLUDE_PRE; NSV_HOW_OVF from a partial
+   version too big; and NSV_HOW_WHOLE for ==, ~= and ~>, which take no partial version. */
 #define NSV_BIT_LT (1u << NSV_CMP_LT)
 #define NSV_BIT_EQ (1u << NSV_CMP_EQ)
 #define NSV_BIT_GT (1u << NSV_CMP_GT)
@@ -315,9 +315,13 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
   unsigned const acc = h & 7u;
   c->major = c->minor = c->patch = 0;
   for (;;) {
-    unsigned const ch = (p != e) ? (unsigned char)*p : 0u;
-    uint32_t x = ch - '0', d;
-    ++p;
+    unsigned ch;
+    uint32_t x, d;
+    if (p == e) { /* a missing component, as in "" or "1." */
+      return NULL;
+    }
+    ch = (unsigned char)*p++;
+    x = ch - '0';
     if (((ch | 0x20u) != 'x') && (ch != '*')) {
       if ((k != i) || (x >= 10u)) {
         return NULL;
@@ -350,8 +354,10 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
     h ^= NSV_BIT_LT | NSV_BIT_EQ | NSV_BIT_GT | NSV_HOW_NOT;
   }
   if ((h & 7u) == NSV_BIT_GT) {
-    /* >1.2 is >=1.3, the next line; past UINT32_MAX nothing is above it. */
-    if (k && (((k == 1u) || !++c->minor) ? ++c->major : 1u)) {
+    /* >1.2 is >=1.3, the next line; past UINT32_MAX nothing is above it. A carry takes
+       k to 0, which keeps the -0 below in either mode: >1.4294967295 is npm's
+       >=1.4294967296.0, and the first version above that is 2.0.0-0, not 2.0.0. */
+    if (k && (((k == 1u) || (!++c->minor && !(k = 0u))) ? ++c->major : 1u)) {
       h ^= NSV_BIT_EQ;
     } else {
       h &= ~7u;
@@ -471,7 +477,7 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
       if (keep > 3u) {
         keep = c.major ? 1u : (c.minor ? 2u : 3u);
       }
-      /* Whether v passes, against whether the operator is !=. */
+      /* Whether v passes, against whether the test is negated (NSV_HOW_NOT). */
       if (((((how >> nsv_cmp(v, &c)) & 1u) && (same >= keep)) ? 1u : 0u) ==
           ((how / NSV_HOW_NOT) & 1u)) {
         state |= 1u;
