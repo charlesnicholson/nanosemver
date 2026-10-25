@@ -102,8 +102,8 @@ still built as C. It has two versions, one class template over two kinds of stor
 - `nsv::SemVerView` is `nsv_parse`'s view: nothing copied, no length cap, but the string
   must outlive it: for a version parsed, used and dropped while its string is at hand.
 
-It needs C++11 or later, nothing from the C++ standard library or the heap, and from the
-C library only `strlen`, and builds without exceptions or RTTI.
+It needs C++11 or later, no heap, and from the standard library only `std::strlen`, and
+builds without exceptions or RTTI.
 
 ```cpp
 #include "nanosemver.hpp"

@@ -5,15 +5,14 @@
    dual-licensed under 0bsd and unlicense, take your pick. see LICENSE for details. */
 /* SPDX-License-Identifier: Unlicense OR 0BSD */
 /* Header-only on top of nanosemver.h; link nanosemver.c, built as C. C++11 or later, and
-   needs no heap, exceptions, RTTI or C++ standard library: from the C library, only
-   strlen. */
+   needs no heap, exceptions or RTTI, and from the standard library only std::strlen. */
 
 #ifndef NANOSEMVER_HPP
 #define NANOSEMVER_HPP
 
 #include "nanosemver.h"
 
-#include <string.h>
+#include <cstring>
 
 namespace nsv {
 
@@ -81,7 +80,7 @@ class SemVerImpl {
     return stored(v, rc);
   }
   static SemVerImpl from(char const *s, int &rc) noexcept {
-    return from(s, s ? strlen(s) : 0, rc);  // NULL is nsv_parse's ERR_ARG
+    return from(s, s ? std::strlen(s) : 0, rc);  // NULL is nsv_parse's ERR_ARG
   }
 
   /* nsv_parse_prefix of s[0, len): the version at its start, its length in consumed, as
@@ -118,7 +117,7 @@ class SemVerImpl {
     return nsv_range_match(range, len, &s_.v, flags);
   }
   int matches(char const *range) const noexcept {
-    return matches(range, range ? strlen(range) : 0);
+    return matches(range, range ? std::strlen(range) : 0);
   }
 
   /* The version for the C API. A SemVer<N>'s is a copy's header: pass its address, never
