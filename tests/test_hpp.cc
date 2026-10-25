@@ -63,6 +63,9 @@ static_assert(std::is_same<decltype(SemVer<8>::from_prefix("", 0, std::declval<s
               "");
 static_assert(noexcept(std::declval<V const &>().matches("", 0)), "");
 static_assert(noexcept(std::declval<V const &>().format(nullptr, 0)), "");
+static_assert(noexcept(std::declval<V const &>().pre(std::declval<char const *&>())), "");
+static_assert(std::is_same<SemVerView, nsv::SemVerImpl<nsv::detail::ViewStorage>>::value,
+              "one class over two storages");
 static_assert(noexcept(std::declval<V const &>() < std::declval<SemVer<8> const &>()), "");
 
 static_assert(sizeof(SemVerView) == sizeof(nsv_semver_t), "one header");
@@ -199,6 +202,11 @@ void same(SemVer<N> const &v, nsv_semver_t const &c) {
   int const bn = nsv_get_build(&v.semver(), &p);
   REQUIRE(bn == static_cast<int>(std::strlen(v.build())));
   REQUIRE(((bn == 0) || (p == v.build())));
+  // And through the pointer-and-length forms it shares with SemVerView.
+  REQUIRE(v.pre(p) == std::strlen(v.pre()));
+  REQUIRE(((*v.pre() == '\0') ? (*p == '\0') : (p == v.pre())));
+  REQUIRE(v.build(p) == std::strlen(v.build()));
+  REQUIRE(((*v.build() == '\0') ? (*p == '\0') : (p == v.build())));
 }
 
 // f fails with want, on a version holding strings and on 0.0.0, and changes neither.

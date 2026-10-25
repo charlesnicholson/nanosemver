@@ -30,6 +30,8 @@ int nsv_hpp_members(char const *s, size_t len) {
   r += d.matches(s, len, NSV_RANGE_EXCLUDE_PRE) + d.matches(s, len) + d.matches(s);
   r += static_cast<int>(d.major() + d.minor() + d.patch());
   r += d.pre()[0] + d.build()[0];
+  char const *p = nullptr;
+  r += static_cast<int>(d.pre(p) + d.build(p));
   return r;
 }
 

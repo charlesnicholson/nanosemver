@@ -151,10 +151,12 @@ nsv::SemVer<8> const small = nsv::SemVer<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
   `memcpy`, and there is nothing to free. One size takes another's version through
   `assign(other.semver())`.
 
-`nsv::SemVerView` has the same members, one header in size, but for two. There is no
-`from(c, rc)`, since a copy's header does not point at its strings; a `SemVer<N>` converts
-to a view instead. And `pre()` and `build()` are the string's own bytes, so not
-NUL-terminated:
+Both are one class template, `nsv::SemVerImpl`, over two storage policies, so a
+`SemVerView` has the same members, one header in size, but for those only a copy can have:
+`assign(c)` and `from(c, rc)`, since a copy's header does not point at its strings (a
+`SemVer<N>` converts to a view instead), and the NUL-terminated `pre()` and `build()`,
+since a view's are the string's own bytes. Calling those on a view fails to compile, with
+a `static_assert` that says why:
 
 ```cpp
 char const tag[] = "1.4.0-rc.2+g3f9a1c2";  // must outlive the view
@@ -167,11 +169,11 @@ bool const newer = v > nsv::SemVer<>();  // true: views and SemVers compare
 nsv::SemVer<> const kept = nsv::SemVer<>::from(v.semver(), rc);  // a copy, to outlive tag
 ```
 
-- `pre(p)` and `build(p)` return the length, 0 when absent, and point `p` at the bytes, or
-  at `""`, as `size_t`, which holds any length, even where `int` is 16 bits.
+- `pre(p)` and `build(p)`, on both, return the length, 0 when absent, and point `p` at the
+  bytes, or at `""`, as `size_t`, which holds any length, even where `int` is 16 bits.
 - A `SemVer<N>` converts to a view of its own strings, so a function that takes a
-  `SemVerView` takes either, and the two compare; the view is good while the `SemVer<N>`
-  is alive and unmodified.
+  `SemVerView` takes either; the view is good while the `SemVer<N>` is alive and
+  unmodified. The comparisons take any mix of the two directly.
 - `semver()` is a view's header, which, unlike a copy's, may itself be copied.
 
 ## Comparing versions
