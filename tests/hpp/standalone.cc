@@ -1,8 +1,5 @@
-// nanosemver.hpp first and alone, built under each C++ standard from C++11 and without
-// exceptions or RTTI, by the Makefile and build.bat: compiled, never linked. It calls
-// every member and operator of SemVer, at the default size and another, and of SemVerView,
-// and compares each with the others, so each standard sees the call sites too. Not
-// NSV_SEMVER_LIT: its designated initializers are C++20.
+// nanosemver.hpp alone, compiled (never linked) as C++11 to C++23, with and without exceptions
+// and RTTI, calling every member. Not NSV_SEMVER_LIT: its designated initializers are C++20.
 #include "nanosemver.hpp"
 
 template <class V>

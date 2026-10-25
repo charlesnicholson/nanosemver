@@ -168,8 +168,8 @@ $(BUILD)/c11/%.c.o: %.c Makefile
 	$(MSG) CC "$< (c11)"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -c $< -o $@
 
-# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI. -nostdinc++, so
-# nothing from the C++ standard library creeps in: avr-g++, for one, ships none of it.
+# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI. -nostdinc++: the
+# header must build without C++ standard headers, as avr-g++ has none.
 HPP_FLAGS := $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(EXTRA_FLAGS) -nostdinc++
 
 $(HPP_OBJS): $(BUILD)/hpp/%.o: $(HPP_SRC) Makefile

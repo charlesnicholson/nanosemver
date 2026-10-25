@@ -27,12 +27,8 @@ using nsv_test::parse_ok;
 namespace {
 
 using V = SemVer;
-// Room for every version the tests parse but the very long: the corpus, the range cases
-// and the generated versions need at most 114 bytes.
-using Wide = SemVerInplace<256>;
-// Room for any copy nsv_copy makes: a 65534-byte pre-release and two NULs. 64 KiB, so
-// only ever on the heap.
-using Huge = SemVerInplace<65536>;
+using Wide = SemVerInplace<256>;    // fits every test version but the huge ones (<= 114 B)
+using Huge = SemVerInplace<65536>;  // fits any nsv_copy; 64 KiB, so heap only
 
 // What the classes promise about themselves.
 static_assert(std::is_same<V, SemVerInplace<64>>::value, "SemVer is SemVerInplace<64>");
@@ -50,7 +46,7 @@ constexpr bool plain() {
 }
 static_assert(plain<V>() && plain<SemVerInplace<2>>() && plain<SemVerView>(), "plain bytes");
 
-// Made only by from and from_prefix, which report errors; never converted.
+// Only from() and from_prefix() make versions; nothing converts.
 static_assert(!std::is_constructible<V, char const *>::value, "");
 static_assert(!std::is_constructible<V, nsv_semver_t const &>::value, "");
 static_assert(!std::is_convertible<nsv_semver_t const &, V>::value, "");
@@ -72,23 +68,21 @@ constexpr bool all_noexcept() {
 }
 static_assert(all_noexcept<V>() && all_noexcept<SemVerView>(), "nothing throws");
 
-// Constant-initialized: a global version costs nothing at startup.
+// Constant-initialized, so free at startup.
 constinit V g_version;
 constinit SemVerInplace<2> g_small;
 constinit SemVerView g_view;
 
-// The bytes of a copy's strings: its pre-release and build, and a NUL after each. A
-// SemVerInplace<N> holds c when this is at most N.
+// String bytes a copy of c needs, NULs included: SemVerInplace<N> holds c if N >= this.
 size_t need(nsv_semver_t const &c) { return c.pre_len + 1u + c.build_len + 1u; }
 
-// What a SemVerInplace<N> makes of what the C API parses as c with rc: rc's error, or the error
-// for c not fitting, or OK.
+// What SemVerInplace<N>::from returns, given nsv_parse's rc and result c.
 template <size_t N>
 int expect(int rc, nsv_semver_t const &c) {
   return (rc != NSV_RET_OK) ? rc : (need(c) <= N) ? NSV_RET_OK : NSV_RET_ERR_BUF_TOO_SMALL;
 }
 
-// v as a string, through its format.
+// v as a string, through format().
 template <class T>
 std::string str(T const &v) {
   int const n = v.format(nullptr, 0);
@@ -100,7 +94,7 @@ std::string str(T const &v) {
   return s;
 }
 
-// s, made into a T, or a failed test. A view views s, which must outlive it.
+// T::from(s), which must succeed. A view points into s.
 template <class T = V>
 T ver(std::string const &s) {
   INFO("making \"", s, "\"");
@@ -128,7 +122,7 @@ std::string build(T const &v) {
   return std::string(p, static_cast<size_t>(n));
 }
 
-// 0.0.0 and nothing more: a default version, and what from leaves on an error.
+// All zero: a default version, or what from() returns on error.
 template <class T>
 bool zero(T const &v) {
   nsv_semver_t const &h = v.semver();
@@ -145,8 +139,7 @@ bool within(T const &v, void const *p, size_t n) {
   return le(lo, q) && le(q + n, lo + sizeof v);
 }
 
-// Every part of v agrees with c, a view, literal or copy, and its strings are its own:
-// a copy's header first, then each string, NUL-terminated where its length ends.
+// v matches c in every part, and its strings are its own, each NUL-terminated.
 template <size_t N>
 void same(SemVerInplace<N> const &v, nsv_semver_t const &c) {
   REQUIRE(need(c) <= N);
@@ -169,7 +162,7 @@ void same(SemVerInplace<N> const &v, nsv_semver_t const &c) {
   REQUIRE(((bn == 0) || within(v, p, bn + 1)));
 }
 
-// Every part of w agrees with c, a view of the same string: it views just what c does.
+// w matches c, a view of the same string, field for field.
 void same_view(SemVerView const &w, nsv_semver_t const &c) {
   nsv_semver_t const &h = w.semver();
   REQUIRE(h.src == c.src);
@@ -191,7 +184,7 @@ char const *place_nul(nsv_test::guarded &g, std::string const &s) {
   return g.place(std::string_view(s.c_str(), s.size() + 1));
 }
 
-// "1.2.3", with a pre-release of p bytes and build metadata of b, where nonzero.
+// numbers, then p bytes of pre-release and b of build, each only if nonzero.
 std::string shaped(char const *numbers, size_t p, size_t b) {
   std::string s = numbers;
   if (p) {
@@ -239,8 +232,7 @@ void default_is_zero() {
   REQUIRE(v < ver("0.0.1"));
 }
 
-// SemVerInplace<N>::from and from_prefix on every corpus input, against nsv_parse and
-// nsv_parse_prefix: the version, or 0.0.0 and the error.
+// from() and from_prefix() on every corpus input, checked against nsv_parse(_prefix).
 template <size_t N>
 void factories() {
   INFO("SemVerInplace<", N, ">");
@@ -269,7 +261,7 @@ void factories() {
     int rc = 1;
     SemVerInplace<N> const p = SemVerInplace<N>::from_prefix(at, s.size(), n, rc);
     REQUIRE(rc == pwant);
-    REQUIRE(n == cn);  // spanning the version, even one that does not fit
+    REQUIRE(n == cn);  // even when the version does not fit
     if (pwant == NSV_RET_OK) {
       same(p, pc);
     } else {
@@ -278,8 +270,7 @@ void factories() {
   }
 }
 
-// Every shape of version whose strings need N - 1, N or N + 1 bytes, and every one in
-// between that a short N reaches: whether it fits, through every way in.
+// Every pre/build split near the size limit (every split for N <= 16), via every from().
 template <size_t N>
 void capacity() {
   INFO("SemVerInplace<", N, ">");
@@ -321,8 +312,7 @@ void capacity_from_2(std::index_sequence<I...>) {
   (capacity<I + 2>(), ...);
 }
 
-// Every version of up to N + 4 characters fits, whatever its shape, and N + 5 need not:
-// the shortest that does not is a bare pre-release or build of N - 1 bytes.
+// Every version of up to N + 4 characters fits; at N + 5, a lone pre-release or build does not.
 template <size_t N>
 void fits_n_plus_4() {
   INFO("SemVerInplace<", N, ">");
@@ -404,7 +394,7 @@ TEST_CASE("nsv::SemVer: from and from_prefix, against nsv_parse and nsv_parse_pr
 }
 
 TEST_CASE("nsv::SemVer: capacity, at every size from 2 to 16, and around 48, 64 and 256") {
-  capacity_from_2(std::make_index_sequence<15>());  // 13 has tail padding, which nothing may use
+  capacity_from_2(std::make_index_sequence<15>());  // 2 to 16; 13 has tail padding
   capacity<48>();
   capacity<64>();
   capacity<256>();
@@ -522,8 +512,7 @@ TEST_CASE("nsv::SemVer: from an nsv_semver_t") {
 }
 
 TEST_CASE("nsv::SemVer: from a version's own strings, into a new one") {
-  // Where nsv_copy, straight into v, would copy the new pre-release over itself: the
-  // source is v's own, and from always fills a fresh version, so it never is.
+  // The source lies inside v, but from() fills a new version, so the copy never overlaps.
   V v = ver("1.0.0-2.0.0-aaaaaaaaaaaaaaaa.bbbbbbbb+cccccccc");
   char const *p = nullptr;
   int rc = 1;
@@ -610,7 +599,7 @@ TEST_CASE("nsv::SemVer: copies and moves copy the bytes") {
   b = V();
   REQUIRE(zero(b));
   V &rc = c;
-  c = rc;  // through a reference, so the compiler does not object
+  c = rc;  // via a reference, to dodge the self-assignment warning
   REQUIRE(str(c) == "4.0.0-x+y");
 
   V d(static_cast<V &&>(c));
@@ -720,8 +709,7 @@ TEST_CASE("nsv::SemVer: comparisons on generated versions") {
     }
   }
   REQUIRE(vs.size() > 300);
-  // So refusals are tested too, which at the default size are few, and how few depends on
-  // the order the compiler calls the generator's arguments in.
+  // Refusals too. At 64 bytes there are few, and how many varies by compiler.
   REQUIRE(too_big > 50);
   for (size_t i = 0; i < vs.size(); ++i) {
     for (size_t j = i; j < vs.size(); ++j) {
@@ -819,9 +807,8 @@ TEST_CASE("nsv::SemVer: format") {
 }
 
 TEST_CASE("nsv::SemVer: format refuses a length over INT_MAX") {
-  // A copy of exactly INT_MAX bytes with the longest numbers formats to
-  // INT_MAX + 32 - sizeof(nsv_semver_t) bytes, too long where the header is under 32 bytes.
-  // Only a 16-bit int makes such a version short enough to parse.
+  // 16-bit int only: a copy of INT_MAX bytes with the longest numbers formats to
+  // INT_MAX + 32 - sizeof(nsv_semver_t) bytes, which is more than an int holds.
   if (!nsv_test::fits_int(65536)) {
     size_t const max = static_cast<size_t>(nsv_test::k_int_max);
     std::string const s = "4294967295.4294967295.4294967295-" +
@@ -905,8 +892,7 @@ TEST_CASE("nsv::SemVerView: from and from_prefix, against nsv_parse and nsv_pars
 }
 
 TEST_CASE("nsv::SemVerView: no length cap") {
-  // The longest version nsv_parse takes, which no SemVer holds, nor any SemVerInplace where int
-  // is 16 bits.
+  // The longest version nsv_parse takes: too long for SemVer, and for any 16-bit-int copy.
   std::string const s = "1.0.0-" + std::string(30000, 'p') + "+" + std::string(35528, 'b');
   SemVerView const w = ver<SemVerView>(s);
   REQUIRE(w.matches(">=1.0.0-0 <1.0.0") == 1);
@@ -946,14 +932,14 @@ TEST_CASE("nsv::SemVerView: from an nsv_semver_t: a view or literal, never a cop
   REQUIRE(rc == NSV_RET_OK);
   REQUIRE(zero(SemVerView::from(nsv_semver_t{}, rc)));
   REQUIRE(rc == NSV_RET_OK);
-  // A copy's header does not point at its strings: nothing to view.
+  // A copy's header has no pointer to its strings, so there is nothing to view.
   V const v = ver(s);
   REQUIRE(zero(SemVerView::from(v.semver(), rc)));
   REQUIRE(rc == NSV_RET_ERR_ARG);
   nsv_test::blob const blob = nsv_test::copy(view);
   REQUIRE(zero(SemVerView::from(*blob, rc)));
   REQUIRE(rc == NSV_RET_ERR_ARG);
-  // But one without strings has nothing to lose.
+  // Unless it has no strings.
   REQUIRE(str(SemVerView::from(ver("7.8.9").semver(), rc)) == "7.8.9");
   REQUIRE(rc == NSV_RET_OK);
 }
