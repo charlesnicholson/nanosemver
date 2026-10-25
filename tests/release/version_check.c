@@ -1,16 +1,15 @@
-/* For CI's release dry run, against a stamped nanosemver.h: NSV_VERSION_LIT formats to
-   exactly NSV_VERSION, so the parts and the whole were stamped alike. */
+/* For CI's release dry run: a stamped NSV_VERSION_LIT formats to exactly the tag's version,
+   given as the one argument. */
 #include "nanosemver.h"
 
 #include <stdio.h>
 #include <string.h>
 
-static nsv_semver_t const k_version = NSV_VERSION_LIT;
-
-int main(void) {
+int main(int argc, char **argv) {
+  nsv_semver_t const v = NSV_VERSION_LIT;
   char buf[256];
-  if ((nsv_format(buf, sizeof buf, &k_version) < 0) || strcmp(buf, NSV_VERSION)) {
-    fprintf(stderr, "NSV_VERSION_LIT is %s, NSV_VERSION is %s\n", buf, NSV_VERSION);
+  if ((argc != 2) || (nsv_format(buf, sizeof buf, &v) < 0) || strcmp(buf, argv[1])) {
+    fprintf(stderr, "NSV_VERSION_LIT is %s, not %s\n", buf, (argc == 2) ? argv[1] : "?");
     return 1;
   }
   printf("NSV_VERSION_LIT: %s\n", buf);

@@ -55,9 +55,9 @@ int lit_c_static_copy(char *out, size_t n) {
 int lit_c_range_check(void) {
   static char const range[] = ">=1.2.0 <1.4.0 || ^2.1.0";
   static char const text[] = "1.3.0-rc.1, and so on";
-  static char const version[] = NSV_VERSION;
   nsv_semver_t v;
   size_t n = 0;
+  char buf[256];
   if ((nsv_parse_prefix(&v, text, sizeof(text) - 1, &n) != NSV_RET_OK) || (n != 10)) {
     return 0;
   }
@@ -72,9 +72,9 @@ int lit_c_range_check(void) {
       (nsv_range_match("^1.4", 4, &k_full, NSV_RANGE_EXCLUDE_PRE) != 0)) {
     return 0;
   }
-  if (nsv_parse(&v, version, sizeof(version) - 1) != NSV_RET_OK) {
+  if ((nsv_format(buf, sizeof(buf), &k_version) < 0) ||
+      (nsv_parse(&v, buf, strlen(buf)) != NSV_RET_OK)) {
     return 0;
   }
-  return (v.major == NSV_VERSION_MAJOR) && (v.minor == NSV_VERSION_MINOR) &&
-         (v.patch == NSV_VERSION_PATCH);
+  return nsv_cmp(&v, &k_version) == NSV_CMP_EQ;
 }

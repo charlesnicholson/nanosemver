@@ -56,7 +56,8 @@ TEST_CASE("NSV_SEMVER_LIT: the documented round-trip check") {
 TEST_CASE("C: NSV_SEMVER_LIT compiled as C99") {
   REQUIRE(nsv_test::format(*lit_c_full()) == "1.4.0-rc.2+g3f9a1c2");
   REQUIRE(nsv_test::format(*lit_c_bare()) == "2.0.0");
-  REQUIRE(nsv_test::format(*lit_c_version()) == NSV_VERSION);  // NSV_VERSION_LIT, from C
+  static nsv_semver_t const version = NSV_VERSION_LIT;
+  REQUIRE(nsv_test::format(*lit_c_version()) == nsv_test::format(version));
   REQUIRE(nsv_cmp(lit_c_full(), &k_stamp) == NSV_CMP_EQ);
 }
 

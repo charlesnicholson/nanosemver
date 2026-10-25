@@ -14,15 +14,6 @@
 extern "C" {
 #endif
 
-/* This header's release, stamped from its tag: v1.4.0-rc.2+b.7 gives 1, 4, 0, "rc.2",
-   "b.7" and "1.4.0-rc.2+b.7". An unreleased checkout is 0.0.0. */
-#define NSV_VERSION_MAJOR 0
-#define NSV_VERSION_MINOR 0
-#define NSV_VERSION_PATCH 0
-#define NSV_VERSION_PRE ""
-#define NSV_VERSION_BUILD ""
-#define NSV_VERSION "0.0.0"
-
 /* All functions return int: >= 0 is success (often a length), < 0 is one of these.
    OVERFLOW and TOO_LONG from nsv_parse mean valid semver beyond nanosemver's limits;
    SYNTAX takes precedence over both. */
@@ -67,9 +58,9 @@ typedef struct nsv_semver {
   .pre_ofs = 0, .pre_len = sizeof(PRE) - 1, \
   .build_ofs = sizeof(PRE), .build_len = sizeof(BUILD) - 1 }
 
-/* This header's release as a literal: static nsv_semver_t const v = NSV_VERSION_LIT; */
-#define NSV_VERSION_LIT NSV_SEMVER_LIT(NSV_VERSION_MAJOR, NSV_VERSION_MINOR, \
-  NSV_VERSION_PATCH, NSV_VERSION_PRE, NSV_VERSION_BUILD)
+/* This header's release, stamped from its tag (0.0.0 unreleased), as an NSV_SEMVER_LIT:
+   nsv_semver_t const v = NSV_VERSION_LIT; makes an nsv_semver_t of it, to compare. */
+#define NSV_VERSION_LIT NSV_SEMVER_LIT(0, 0, 0, "", "")
 
 /* Parses exactly len bytes of s (no NUL terminator needed). The whole range must be a
    semver 2.0.0 string: no leading 'v', no whitespace. *out becomes a view into s, so s

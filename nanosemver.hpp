@@ -140,10 +140,15 @@ bool operator>=(SemVerImpl<A> const &a, SemVerImpl<B> const &b) noexcept {
 
 }  // namespace detail
 
-/* release.sh stamps this as it does nanosemver.h's NSV_VERSION, so both headers must come
-   from the same release, down to the pre-release. */
-static_assert(detail::same(NSV_VERSION, "0.0.0"),
+/* release.sh stamps the literal below as it does NSV_VERSION_LIT, so the two quoted
+   expansions match only within one release. Quoting them needs no C++20. */
+#define NSV_HPP_STR(...) #__VA_ARGS__  // variadic: the expansion has commas
+#define NSV_HPP_QUOTE(...) NSV_HPP_STR(__VA_ARGS__)
+static_assert(detail::same(NSV_HPP_QUOTE(NSV_VERSION_LIT),
+                           NSV_HPP_QUOTE(NSV_SEMVER_LIT(0, 0, 0, "", ""))),
               "nanosemver.hpp and nanosemver.h are from different releases");
+#undef NSV_HPP_QUOTE
+#undef NSV_HPP_STR
 
 template <size_t N>
 using SemVerInplace = detail::SemVerImpl<detail::Copy<N>>;  // N bytes of strings, in place
