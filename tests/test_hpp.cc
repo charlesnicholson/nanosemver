@@ -966,9 +966,10 @@ TEST_CASE("nsv::SemVerView: copies view the same string, and a SemVer outlives i
   int rc = 1;
   V const kept = V::from(b.semver(), rc);
   REQUIRE(rc == NSV_RET_OK);
-  s.assign(s.size(), 'X');
+  std::fill(s.begin(), s.end(), 'X');  // in place: assign could move the bytes
   REQUIRE(str(kept) == "3.2.1-beta.4+sha.abc");
-  REQUIRE(str(b) != "3.2.1-beta.4+sha.abc");  // the view sees what its string now holds
+  REQUIRE(b.semver().src == s.c_str());  // the view sees what its string now holds
+  REQUIRE(pre(b) == std::string(6, 'X'));
 }
 
 TEST_CASE("nsv::SemVer: README examples") {

@@ -24,7 +24,8 @@
 #               small MCU like an AVR, whose 16-bit int needs the length checks that
 #               -DNSV_INT_MAX=32767 compiles in, division by shifts, and nsv_cmp's
 #               32-bit compare; and nanosemver.hpp compiled on its own as C++11 to
-#               C++23, with and without exceptions and RTTI
+#               C++23, with and without exceptions and RTTI, and without the C++
+#               standard headers
 #   fuzz        the standalone fuzz driver; any compiler
 #   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
@@ -167,8 +168,9 @@ $(BUILD)/c11/%.c.o: %.c Makefile
 	$(MSG) CC "$< (c11)"
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -std=c11 -c $< -o $@
 
-# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI.
-HPP_FLAGS := $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(EXTRA_FLAGS)
+# No sanitizers: nothing here runs, and UBSan's vptr check needs RTTI. -nostdinc++, so
+# nothing from the C++ standard library creeps in: avr-g++, for one, ships none of it.
+HPP_FLAGS := $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(EXTRA_FLAGS) -nostdinc++
 
 $(HPP_OBJS): $(BUILD)/hpp/%.o: $(HPP_SRC) Makefile
 	@mkdir -p $(dir $@)

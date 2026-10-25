@@ -103,8 +103,9 @@ still built as C. It has two kinds of version, which compare with each other:
 - `nsv::SemVerView` is `nsv_parse`'s view: nothing copied, no length cap, but the string
   must outlive it: for a version parsed, used and dropped while its string is at hand.
 
-It needs C++11 or later, no heap, and from the standard library only `std::strlen`, and
-builds without exceptions or RTTI.
+It needs C++11 or later, no heap, exceptions, RTTI or C++ standard library, and from the
+C library only `strlen`, through `<string.h>`, so it builds where there are no C++
+standard headers at all, as with avr-g++.
 
 ```cpp
 #include "nanosemver.hpp"
@@ -139,8 +140,12 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
   takes an `nsv_semver_t`: a `SemVerInplace<N>` copies any, a view, copy or literal, and a
   `SemVerView` views a view or literal, but not a copy, whose header does not point at
   its strings (`NSV_RET_ERR_ARG`). Each makes a new version, with its error in `rc` and
-  `0.0.0` on error; to replace a version, assign it another. (`NSV_SEMVER_LIT` itself
-  needs C++20 in C++, for its designated initializers.)
+  `0.0.0` on error. (`NSV_SEMVER_LIT` itself needs C++20 in C++, for its designated
+  initializers.)
+- Each returns a temporary, which C++17 requires, and older compilers choose, to build in
+  the variable it initializes, so a `SemVerInplace<N>` takes no stack for its `N` bytes.
+  To replace a version, assign it another: that builds the new one first and copies it
+  over, so it does take the version's size in stack.
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
   `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
   longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
@@ -358,7 +363,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI, and without the C++ standard headers |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
 | `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
