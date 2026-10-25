@@ -420,8 +420,9 @@ into `nanosemver.h` and `nanosemver.hpp` and publishes them as a GitHub release,
 is the first line of each, and in `nanosemver.h`, `NSV_VERSION_LIT`
 (`NSV_SEMVER_LIT(1, 2, 0, "rc.1", "")`): `nsv_semver_t const v = NSV_VERSION_LIT;` makes
 a version of it, for code that compares or reports which nanosemver it has. A stamped
-`nanosemver.hpp` refuses to build against any other release's `nanosemver.h`. The checked-in headers keep
-their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever bumps a version.
+`nanosemver.hpp` refuses to build against any other release's `nanosemver.h`. The
+checked-in headers keep their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever
+bumps a version.
 `./release.sh v1.2.0` shows locally what a tag would ship.
 
 ## License
