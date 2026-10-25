@@ -98,8 +98,8 @@ still built as C. It has two kinds of version, which compare with each other:
 
 - `nsv::SemVer` holds its own copy in place, the header and a 64-byte array for the
   pre-release and build strings, so it never allocates and never dangles: for a version
-  that has to outlive the string it came from. `nsv::SemVerN<N>` is the same with `N`
-  bytes; `SemVer` is `SemVerN<64>`.
+  that has to outlive the string it came from. `nsv::SemVerInplace<N>` is the same with `N`
+  bytes; `SemVer` is `SemVerInplace<64>`.
 - `nsv::SemVerView` is `nsv_parse`'s view: nothing copied, no length cap, but the string
   must outlive it: for a version parsed, used and dropped while its string is at hand.
 
@@ -120,7 +120,7 @@ int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
 char const *pre;
 int const n = v.pre(pre);  // 4: "rc.2", NUL-terminated
 // 8 bytes: too few for these two strings and their NULs, so NSV_RET_ERR_BUF_TOO_SMALL
-nsv::SemVerN<8> const small = nsv::SemVerN<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
+nsv::SemVerInplace<8> const small = nsv::SemVerInplace<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
 ```
 
 ```cpp
@@ -136,7 +136,7 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
 
 - `from(s, rc)` takes a NUL-terminated string and `from(s, len, rc)` a length, as
   `nsv_parse` does, and `from_prefix(s, len, n, rc)` is `nsv_parse_prefix`. `from(c, rc)`
-  takes an `nsv_semver_t`: a `SemVerN<N>` copies any, a view, copy or literal, and a
+  takes an `nsv_semver_t`: a `SemVerInplace<N>` copies any, a view, copy or literal, and a
   `SemVerView` views a view or literal, but not a copy, whose header does not point at
   its strings (`NSV_RET_ERR_ARG`). Each makes a new version, with its error in `rc` and
   `0.0.0` on error; to replace a version, assign it another. (`NSV_SEMVER_LIT` itself
@@ -144,7 +144,7 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
   `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
   longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
-  `SemVerN<N>` is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment,
+  `SemVerInplace<N>` is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment,
   so a `SemVer` is 96 on 64-bit targets and 88 on 32-bit ones. A `SemVerView` is the
   header.
 - `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, between any two
@@ -154,8 +154,8 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
   since an error is nonzero too.
 - `major()`, `minor()` and `patch()` are the numbers; `pre(p)` and `build(p)` are
   `nsv_get_pre` and `nsv_get_build`, the length with `p` at the bytes, NUL-terminated in
-  a `SemVerN<N>` and the string's own in a view; `format(dst, n)` is `nsv_format`.
-- `semver()` is the version for the C API: pass `&v.semver()`. A `SemVerN<N>`'s is a
+  a `SemVerInplace<N>` and the string's own in a view; `format(dst, n)` is `nsv_format`.
+- `semver()` is the version for the C API: pass `&v.semver()`. A `SemVerInplace<N>`'s is a
   copy's header, so never copy it, as its strings would stay behind.
 - Either is plain bytes, trivially copyable: copying or moving one copies them, even by
   `memcpy`, and there is nothing to free. A copied view views the same string.
@@ -396,7 +396,7 @@ metadata on the version never matters.
 
 `tests/test_hpp.cc` holds `nsv::SemVer` and `nsv::SemVerView` to the C API under them:
 every parse, prefix parse, comparison, range match and format against the C function's
-own answer, `SemVerN` at sizes from 2 bytes to 64 KiB, and views of the longest versions
+own answer, `SemVerInplace` at sizes from 2 bytes to 64 KiB, and views of the longest versions
 there are; whether a version fits, at every size from 2 to 16 and around 48, 64 and 256;
 every error leaving `0.0.0`; and copies that outlive their source string.
 

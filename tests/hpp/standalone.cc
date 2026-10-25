@@ -45,9 +45,9 @@ int nsv_hpp_compare(A const &a, B const &b) {
 inline int nsv_hpp_standalone(char const *s, size_t len) {
   int rc = 0;
   nsv::SemVer const a = nsv::SemVer::from(s, len, rc);
-  nsv::SemVerN<2> const b = nsv::SemVerN<2>::from(s, len, rc);
+  nsv::SemVerInplace<2> const b = nsv::SemVerInplace<2>::from(s, len, rc);
   nsv::SemVerView const v = nsv::SemVerView::from(s, len, rc);
-  return nsv_hpp_members<nsv::SemVer>(s, len) + nsv_hpp_members<nsv::SemVerN<2>>(s, len) +
+  return nsv_hpp_members<nsv::SemVer>(s, len) + nsv_hpp_members<nsv::SemVerInplace<2>>(s, len) +
          nsv_hpp_members<nsv::SemVerView>(s, len) + nsv_hpp_compare(a, a) +
          nsv_hpp_compare(a, b) + nsv_hpp_compare(b, a) + nsv_hpp_compare(v, v) +
          nsv_hpp_compare(v, a) + nsv_hpp_compare(b, v);

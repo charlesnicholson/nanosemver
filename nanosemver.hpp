@@ -23,8 +23,8 @@ constexpr bool same(char const *a, char const *b) {
   return (*a == *b) && (!*a || same(a + 1, b + 1));
 }
 
-/* SemVerN<N>'s storage: an nsv_copy blob in place, the header and then N bytes for the
-   pre-release and build strings and their NULs. */
+/* SemVerInplace<N>'s storage: an nsv_copy blob in place, the header and then N bytes for
+   the pre-release and build strings and their NULs. */
 template <size_t N>
 struct Copy {
   static_assert(N >= 2, "the pre-release and build strings' NULs need 2 bytes");
@@ -54,18 +54,19 @@ struct View {
   }
 };
 
-/* A version over the C API, its strings held as Storage holds them: SemVerN<N>, SemVer
-   and SemVerView, below. from and from_prefix make one, with any error in rc and the version
-   0.0.0 on error; replace one by assigning another. A default-constructed version is
-   0.0.0. A version is plain bytes: copying it copies them, and there is nothing to free. */
+/* A version over the C API, its strings held as Storage holds them: SemVerInplace<N>,
+   SemVer and SemVerView, below. from and from_prefix make one, with any error in rc and
+   the version 0.0.0 on error; replace one by assigning another. A default-constructed
+   version is 0.0.0. A version is plain bytes: copying it copies them, and there is nothing
+   to free. */
 template <class Storage>
 class SemVerImpl {
  public:
   constexpr SemVerImpl() noexcept : s_() {}
 
   /* nsv_parse of s[0, len), or of the NUL-terminated s: rc is NSV_RET_OK, or ERR_ARG /
-     ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, or for a SemVerN<N>, ERR_BUF_TOO_SMALL if
-     the version does not fit, or ERR_TOO_LONG where int is 16 bits and its copy is over
+     ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, or for a SemVerInplace<N>, ERR_BUF_TOO_SMALL
+     if the version does not fit, or ERR_TOO_LONG where int is 16 bits and its copy is over
      INT_MAX bytes. */
   static SemVerImpl from(char const *s, size_t len, int &rc) noexcept {
     nsv_semver_t v = {};
@@ -85,7 +86,7 @@ class SemVerImpl {
     return stored(v, rc);
   }
 
-  /* c, as a SemVerN<N>'s copy, or a SemVerView's view: rc as from gives it, but for a
+  /* c, as a SemVerInplace<N>'s copy, or a SemVerView's view: rc as from gives it, but for a
      view, ERR_ARG if c is a copy's header, which does not point at its strings. */
   static SemVerImpl from(nsv_semver_t const &c, int &rc) noexcept {
     rc = NSV_RET_OK;
@@ -97,7 +98,8 @@ class SemVerImpl {
   uint32_t patch() const noexcept { return s_.v.patch; }
 
   /* nsv_get_pre / nsv_get_build: the length, and in s the bytes, or "" if absent.
-     NUL-terminated in a SemVerN<N>; in a view, the string's own bytes, so use the length. */
+     NUL-terminated in a SemVerInplace<N>; in a view, the string's own bytes, so use the
+     length. */
   int pre(char const *&s) const noexcept { return nsv_get_pre(&s_.v, &s); }
   int build(char const *&s) const noexcept { return nsv_get_build(&s_.v, &s); }
 
@@ -113,8 +115,8 @@ class SemVerImpl {
     return matches(range, range ? std::strlen(range) : 0);
   }
 
-  /* The version for the C API. A SemVerN<N>'s is a copy's header: pass its address, never
-     copy it, as its strings would stay behind. */
+  /* The version for the C API. A SemVerInplace<N>'s is a copy's header: pass its address,
+     never copy it, as its strings would stay behind. */
   nsv_semver_t const &semver() const noexcept { return s_.v; }
 
  private:
@@ -168,10 +170,10 @@ static_assert(detail::same(NSV_VERSION, "0.0.0"),
 /* A version that owns its strings, N bytes of them in place: it outlives the string it came
    from. */
 template <size_t N>
-using SemVerN = detail::SemVerImpl<detail::Copy<N>>;
+using SemVerInplace = detail::SemVerImpl<detail::Copy<N>>;
 
-/* SemVerN at 64 bytes, which hold every version of up to 68 characters. */
-using SemVer = SemVerN<64>;
+/* SemVerInplace at 64 bytes, which hold every version of up to 68 characters. */
+using SemVer = SemVerInplace<64>;
 
 /* A version that views the string it came from, which must outlive it: nothing copied,
    and no length cap. */
