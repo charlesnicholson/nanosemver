@@ -7,9 +7,11 @@
 
 static nsv_semver_t const k_full = NSV_SEMVER_LIT(1, 4, 0, "rc.2", "g3f9a1c2");
 static nsv_semver_t const k_bare = NSV_SEMVER_LIT(2, 0, 0, "", "");
+static nsv_semver_t const k_version = NSV_VERSION_LIT;
 
 nsv_semver_t const *lit_c_full(void) { return &k_full; }
 nsv_semver_t const *lit_c_bare(void) { return &k_bare; }
+nsv_semver_t const *lit_c_version(void) { return &k_version; }
 
 static int ver_qsort_cmp(void const *a, void const *b) {
   return nsv_cmp((nsv_semver_t const *)a, (nsv_semver_t const *)b) - 1;

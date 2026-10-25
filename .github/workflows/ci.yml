@@ -61,6 +61,13 @@ jobs:
               exit 1
             fi
           done
+          # NSV_VERSION_LIT, built from the stamped parts, formats back to the stamped whole.
+          ./release.sh v1.0.0-a-b.c+d-e.f build/release-build > /dev/null
+          for d in build/release build/release-final build/release-build; do
+            cc -std=c99 -Wall -Wextra -Werror -I"$d" tests/release/version_check.c \
+              "$d/nanosemver.c" -o "$d/version_check"
+            "$d/version_check"
+          done
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip
           unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.h \
             | cmp - build/release/nanosemver.h

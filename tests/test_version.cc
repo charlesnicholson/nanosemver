@@ -15,4 +15,15 @@ TEST_CASE("NSV_VERSION: a version, agreeing with the numbers") {
   REQUIRE(v.major == NSV_VERSION_MAJOR);
   REQUIRE(v.minor == NSV_VERSION_MINOR);
   REQUIRE(v.patch == NSV_VERSION_PATCH);
+  REQUIRE(nsv_test::pre(v) == "" NSV_VERSION_PRE);  // string literals too
+  REQUIRE(nsv_test::build(v) == "" NSV_VERSION_BUILD);
+}
+
+TEST_CASE("NSV_VERSION_LIT: the same version, as a literal") {
+  static nsv_semver_t const lit = NSV_VERSION_LIT;
+  std::string const s = NSV_VERSION;
+  REQUIRE(nsv_test::format(lit) == s);
+  nsv_semver_t const v = nsv_test::parse_ok(s);
+  REQUIRE(nsv_cmp(&lit, &v) == NSV_CMP_EQ);
+  REQUIRE(nsv_test::build(lit) == nsv_test::build(v));
 }
