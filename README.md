@@ -94,17 +94,22 @@ and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` an
 ## C++
 
 `nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
-still built as C. Its `nsv::SemVer<N>` holds its own copy in place, the header and an
-`N`-byte array for the pre-release and build strings, 48 bytes by default, so it never
-allocates and never dangles the way a view can. Errors come back without exceptions:
-whatever can fail returns an `NSV_RET_*` code and leaves the version as it was. It needs
-C++11 or later and nothing from the standard library or the heap, and builds without
-exceptions or RTTI.
+still built as C. It has two versions, which compare with each other:
+
+- `nsv::SemVer<N>` holds its own copy in place, the header and an `N`-byte array for the
+  pre-release and build strings, 64 bytes by default, so it never allocates and never
+  dangles: for a version that has to outlive the string it came from.
+- `nsv::SemVerView` is `nsv_parse`'s view: nothing copied, no length cap, but the string
+  must outlive it: for a version parsed, used and dropped while its string is at hand.
+
+Errors come back without exceptions: whatever can fail returns an `NSV_RET_*` code and
+leaves the version as it was. It needs C++11 or later and nothing from the standard
+library or the heap, and builds without exceptions or RTTI.
 
 ```cpp
 #include "nanosemver.hpp"
 
-nsv::SemVer<> v, w;  // 0.0.0; 48 bytes for the pre-release and build, in place
+nsv::SemVer<> v, w;  // 0.0.0; 64 bytes for the pre-release and build, in place
 if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
 w.parse("1.4.0");
 bool const older = v < w;  // true: a pre-release ranks below its release
@@ -119,8 +124,12 @@ int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
   `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
   longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
-  version is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment: 80 by
-  default on 64-bit targets, and 72 on 32-bit ones.
+  version is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment: 96 by
+  default on 64-bit targets, and 88 on 32-bit ones.
+- Parsing and assigning copy straight into the version, taking no stack for `N`, unless
+  the source lies in the version itself, as when parsing its own `pre()`: `nsv_copy` may
+  not copy over its own source, so that alone goes through a temporary `SemVer<N>`, out
+  of line, and takes its size in stack.
 - `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
   does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
   `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer<N>::from(c, rc)` makes a new
@@ -139,6 +148,27 @@ int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
 - A version is plain bytes, trivially copyable: copying or moving one copies them, even by
   `memcpy`, and there is nothing to free. One size takes another's version through
   `assign(other.semver())`.
+
+`nsv::SemVerView` has the same members, one header in size, but for `pre()` and `build()`,
+which are the string's own bytes and so are not NUL-terminated:
+
+```cpp
+char const tag[] = "1.4.0-rc.2+g3f9a1c2";  // must outlive the view
+nsv::SemVerView v;  // 0.0.0
+if (v.parse(tag) != NSV_RET_OK) { /* not a version: v is unchanged */ }
+char const *pre;
+size_t const n = v.pre(pre);  // 4: "rc.2", then "+g3f9a1c2": tag's own bytes
+bool const newer = v > nsv::SemVer<>();  // true: views and SemVers compare
+int rc;
+nsv::SemVer<> const kept = nsv::SemVer<>::from(v.semver(), rc);  // a copy, to outlive tag
+```
+
+- `pre(p)` and `build(p)` return the length, 0 when absent, and point `p` at the bytes, or
+  at `""`, as `size_t`, which holds any length, even where `int` is 16 bits.
+- A `SemVer<N>` converts to a view of its own strings, so a function that takes a
+  `SemVerView` takes either, and the two compare; the view is good while the `SemVer<N>`
+  is alive and unmodified.
+- `semver()` is a view's header, which, unlike a copy's, may itself be copied.
 
 ## Comparing versions
 
@@ -345,7 +375,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 | `make libfuzzer` | libFuzzer with ASan and UBSan (Linux clang; Apple clang ships no libFuzzer) |
 | `make bench BENCH_ARGS=--quick` | host timings against `BENCH_BASE`; `--filter cmp` picks workloads |
 | `make bench-cm` | emulated Cortex-M0+ and Cortex-M4 instruction counts and cycles against `BENCH_BASE` |
-| `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks |
+| `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks; and `nsv::SemVer`'s stack |
 | `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
 | `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
 | `make mutate MUTATE_ARGS="--jobs 8 --shard 0/4"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |
@@ -374,11 +404,15 @@ repetition change nothing, a set of bounds admits an unbroken run of versions,
 `NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
 metadata on the version never matters.
 
-`tests/test_hpp.cc` holds `nsv::SemVer` to the C API under it: every parse, prefix parse,
-comparison, range match and format against the C function's own answer, at sizes from 2
-bytes to 64 KiB; whether a version fits, at and around every size up to 16 and the
-default; every error leaving the version as it was; and copies that outlive their source
-string.
+`tests/test_hpp.cc` holds `nsv::SemVer` and `nsv::SemVerView` to the C API under them:
+every parse, prefix parse, comparison, range match and format against the C function's
+own answer, `SemVer` at sizes from 2 bytes to 64 KiB, and views of the longest versions
+there are; whether a version fits, at every size from 2 to 16 and around 48, 64 and 256;
+strings taken from every offset in, at and around a version, which ASan watches for
+overlapping copies; every error leaving the version as it was; and copies that outlive
+their source string. `make size-check` holds `SemVer`'s stack to a few dozen bytes on
+Cortex-M0+, at the default size and at 4096, everywhere but the one path that has to copy
+through a temporary.
 
 `make mutate` measures all of that: it makes a thousand small changes to
 `nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a

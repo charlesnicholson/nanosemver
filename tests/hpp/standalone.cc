@@ -1,8 +1,8 @@
 // nanosemver.hpp first and alone, built under each C++ standard from C++11 and without
 // exceptions or RTTI, by the Makefile and build.bat: compiled, never linked. It calls
-// every member and operator, of the default size and another, and compares the two, so
-// each standard sees the call sites too. Not NSV_SEMVER_LIT: its designated initializers
-// are C++20.
+// every member and operator of SemVer, at the default size and another, and of SemVerView,
+// and compares each with the others, so each standard sees the call sites too. Not
+// NSV_SEMVER_LIT: its designated initializers are C++20.
 #include "nanosemver.hpp"
 
 template <size_t N>
@@ -27,8 +27,27 @@ int nsv_hpp_members(char const *s, size_t len) {
   return r;
 }
 
-template <size_t A, size_t B>
-int nsv_hpp_compare(nsv::SemVer<A> const &a, nsv::SemVer<B> const &b) {
+inline int nsv_hpp_view(char const *s, size_t len) {
+  nsv::SemVerView a;
+  size_t consumed = 0;
+  int r = a.parse(s, len) + a.parse(s) + a.parse_prefix(s, len, consumed);
+  nsv::SemVerView b(a);
+  b = a;
+  nsv::SemVer<> const owned;
+  nsv::SemVerView const c = owned;
+
+  char buf[32];
+  r += b.format(buf, sizeof buf);
+  r += b.matches(s, len, NSV_RANGE_EXCLUDE_PRE) + b.matches(s, len) + b.matches(s);
+  r += static_cast<int>(b.major() + b.minor() + b.patch() + c.major());
+  char const *p = nullptr;
+  r += static_cast<int>(b.pre(p) + b.build(p));
+  r += static_cast<int>(b.semver().major);
+  return r;
+}
+
+template <class A, class B>
+int nsv_hpp_compare(A const &a, B const &b) {
   bool const cmp[] = { a == b, a != b, a < b, a <= b, a > b, a >= b };
   int r = 0;
   for (bool x : cmp) {
@@ -40,8 +59,11 @@ int nsv_hpp_compare(nsv::SemVer<A> const &a, nsv::SemVer<B> const &b) {
 inline int nsv_hpp_standalone(char const *s, size_t len) {
   nsv::SemVer<> a;
   nsv::SemVer<2> b;
+  nsv::SemVerView v;
   a.parse(s, len);
   b.assign(a.semver());
-  return nsv_hpp_members<48>(s, len) + nsv_hpp_members<2>(s, len) +
-         nsv_hpp_compare(a, a) + nsv_hpp_compare(a, b) + nsv_hpp_compare(b, a);
+  v.parse(s, len);
+  return nsv_hpp_members<64>(s, len) + nsv_hpp_members<2>(s, len) + nsv_hpp_view(s, len) +
+         nsv_hpp_compare(a, a) + nsv_hpp_compare(a, b) + nsv_hpp_compare(b, a) +
+         nsv_hpp_compare(v, v) + nsv_hpp_compare(v, a) + nsv_hpp_compare(b, v);
 }
