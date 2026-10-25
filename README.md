@@ -94,16 +94,17 @@ and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` an
 ## C++
 
 `nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
-still built as C. Its `nsv::SemVer` owns its own copy, one allocation holding the header
-and both strings, so it never dangles the way a view can. Errors come back without
-exceptions: whatever can fail returns an `NSV_RET_*` code and leaves the version as it
-was. It needs C++11 or later and nothing from the standard library, and builds without
+still built as C. Its `nsv::SemVer<N>` holds its own copy in place, the header and an
+`N`-byte array for the pre-release and build strings, 48 bytes by default, so it never
+allocates and never dangles the way a view can. Errors come back without exceptions:
+whatever can fail returns an `NSV_RET_*` code and leaves the version as it was. It needs
+C++11 or later and nothing from the standard library or the heap, and builds without
 exceptions or RTTI.
 
 ```cpp
 #include "nanosemver.hpp"
 
-nsv::SemVer v, w;  // 0.0.0, allocating nothing
+nsv::SemVer<> v, w;  // 0.0.0; 48 bytes for the pre-release and build, in place
 if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
 w.parse("1.4.0");
 bool const older = v < w;  // true: a pre-release ranks below its release
@@ -111,16 +112,23 @@ int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0
 char buf[32];
 int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
 char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
+nsv::SemVer<8> small;  // 8 bytes: too few for these two strings and their NULs
+int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
 ```
 
+- `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
+  `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
+  longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
+  version is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment: 80 by
+  default on 64-bit targets, and 72 on 32-bit ones.
 - `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
   does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
-  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer::from(c, rc)` makes a new
+  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer<N>::from(c, rc)` makes a new
   version of one, its error in `rc`; there is no constructor from one, since a
   constructor could not report that error. (`NSV_SEMVER_LIT` itself needs C++20 in C++,
   for its designated initializers.)
-- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, so `==` ignores build
-  metadata: `1.0.0+a == 1.0.0+b`.
+- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, between versions of
+  any sizes, so `==` ignores build metadata: `1.0.0+a == 1.0.0+b`.
 - `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
   return what `nsv_range_match` does: 1, 0, or an `NSV_RET_ERR_*` code. Test for `== 1`,
   since an error is nonzero too.
@@ -128,9 +136,9 @@ char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
   NUL-terminated, and `""` when absent; `format(dst, n)` is `nsv_format`.
 - `semver()` is the version for the C API: pass `&v.semver()`, but never copy it, since
   it is a copy's header.
-- Copying a version copies its allocation, moving hands it over, and a moved-from version
-  is `0.0.0`. Allocation is `::operator new`'s, so running out of memory throws
-  `std::bad_alloc`, or without exceptions ends the program.
+- A version is plain bytes, trivially copyable: copying or moving one copies them, even by
+  `memcpy`, and there is nothing to free. One size takes another's version through
+  `assign(other.semver())`.
 
 ## Comparing versions
 
@@ -367,8 +375,10 @@ repetition change nothing, a set of bounds admits an unbroken run of versions,
 metadata on the version never matters.
 
 `tests/test_hpp.cc` holds `nsv::SemVer` to the C API under it: every parse, prefix parse,
-comparison, range match and format against the C function's own answer, every error
-leaving the version as it was, and copies that outlive their source string.
+comparison, range match and format against the C function's own answer, at sizes from 2
+bytes to 64 KiB; whether a version fits, at and around every size up to 16 and the
+default; every error leaving the version as it was; and copies that outlive their source
+string.
 
 `make mutate` measures all of that: it makes a thousand small changes to
 `nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a
