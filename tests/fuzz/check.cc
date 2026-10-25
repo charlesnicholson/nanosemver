@@ -12,6 +12,10 @@
 #include <string>
 #include <string_view>
 
+#if NSV_DIAG
+#include "../diag/diag.h"
+#endif
+
 namespace nsv_fuzz {
 namespace {
 
@@ -37,6 +41,17 @@ blob alloc_blob(size_t n) {
   std::memset(static_cast<void *>(b.get()), 0xA5, n);
   return b;
 }
+
+#if NSV_DIAG
+nsv_diag::capture *g_printed;  // what check() has had printed
+
+// Whether what nanosemver printed since the last call is right for rc from p[0..n).
+bool printed_ok(char const *kind, char const *p, size_t n, int rc) {
+  return nsv_diag::message_ok(g_printed->take(), kind, std::string_view(p, n), rc);
+}
+#else
+bool printed_ok(char const *, char const *, size_t, int) { return true; }
+#endif
 
 int expected_rc(ref::status s) {
   switch (s) {
@@ -140,6 +155,7 @@ char const *check_prefix(char const *p, size_t n) {
   std::memcpy(before, &out, sizeof(out));
   size_t got = 12345;
   int const rc = nsv_parse_prefix(&out, p, n, &got);
+  FUZZ_REQUIRE(printed_ok("version", p, n, rc));
   std::string_view const s(p, n);
   ref::version rv;
   if (n <= k_prefix_exhaustive) {
@@ -178,6 +194,7 @@ char const *check_range(char const *r, size_t n, nsv_semver_t const &v,
     ref::status const st =
         ref::range_match(std::string_view(r, n), rv, (flags & NSV_RANGE_EXCLUDE_PRE) != 0, &match);
     int const rc = nsv_range_match(r, n, &v, flags);
+    FUZZ_REQUIRE(printed_ok("range", r, n, rc));
     if (st == ref::status::ok) {
       FUZZ_REQUIRE(rc == int(match));
     } else {
@@ -198,6 +215,7 @@ char const *check_one(char const *p, size_t n, nsv_semver_t *v, ref::version *rv
   std::memcpy(before, &out, sizeof(out));
 
   int const rc = nsv_parse(&out, p, n);
+  FUZZ_REQUIRE(printed_ok("version", p, n, rc));
   FUZZ_REQUIRE(rc == expected_rc(ref::parse(std::string_view(p, n), rv)));
   *parsed = (rc == NSV_RET_OK);
   if (!*parsed) {
@@ -216,6 +234,10 @@ char const *check_one(char const *p, size_t n, nsv_semver_t *v, ref::version *rv
 
 char const *check(std::uint8_t const *data, std::size_t size) {
   static nsv_test::guarded ga, gb;
+#if NSV_DIAG
+  nsv_diag::capture printed;
+  g_printed = &printed;
+#endif
   std::string_view const in(reinterpret_cast<char const *>(data), size);
   size_t const nl = in.find('\n');
   std::string_view const a = in.substr(0, nl);

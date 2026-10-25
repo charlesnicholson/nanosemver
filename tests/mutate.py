@@ -3,7 +3,8 @@
 
 Makes one small change at a time to the code (a comparison flipped, a constant off by
 one, an operator swapped, a statement dropped, ...), builds the unit tests against it
-in both configurations, and runs them. A mutant the tests fail on is killed; one they
+in both int configurations, or for code under #if NSV_DIAG in the diag one, and runs
+them. A mutant the tests fail on is killed; one they
 pass is a survivor, either a change the tests miss or one that changes nothing (an
 equivalent mutant). Survivors are listed with their line, for a person to judge: a test
 for the first, an entry in tests/mutate-equivalent.txt, with the reason, for the second.
@@ -29,12 +30,22 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "nanosemver.c")
-INT16 = ["-DNSV_INT_MAX=32767", "-DNSV_SOFT_DIV=1", "-DNSV_WIDE_CMP=0"]
+# Each configuration's defines, and the subdirectory of the build its test objects are in.
+CONFIGS = {
+    "main": ([], ""),
+    "int16": (["-DNSV_INT_MAX=32767", "-DNSV_SOFT_DIV=1", "-DNSV_WIDE_CMP=0"], "int16"),
+    "diag": (["-DNSV_DIAG=1"], "diag"),
+}
 TIMEOUT = 120
 EQUIVALENT = "tests/mutate-equivalent.txt"
 # The unit tests that take most of the time, as doctest filters (commas separate them).
 SLOW = ",".join(["*every range of up to three*", "fuzz: generated inputs",
                  "*every byte at every position*", "*every string of up to six bytes*"])
+# A mutant of the messages runs their own tests first, which kill most of them.
+FIRST = {"main": "--test-case-exclude=" + SLOW, "int16": "--test-case-exclude=" + SLOW,
+         "diag": "--test-case=diag:*"}
+REST = {"main": "--test-case=" + SLOW, "int16": "--test-case=" + SLOW,
+        "diag": "--test-case-exclude=diag:*"}
 
 
 def code_mask(text):
@@ -202,18 +213,32 @@ def load_equivalent():
 NOT_UNIT = {os.path.join("tests", "fuzz", "driver.cc.o")}
 
 
-def objects(build, int16):
-    base = os.path.join(build, "int16") if int16 else build
+def objects(build, config):
+    base = os.path.join(build, CONFIGS[config][1])
     objs = []
     for d, _, files in os.walk(os.path.join(base, "tests")):
-        if not int16 and os.sep + "int16" in d[len(build):]:
-            continue
         objs += [os.path.join(d, f) for f in files if f.endswith(".o")
                  and os.path.relpath(os.path.join(d, f), base) not in NOT_UNIT]
     return sorted(objs)
 
 
-def build(args, text, workdir, int16):
+def diag_lines(text):
+    """The line numbers that only a build with NSV_DIAG compiles: #if NSV_DIAG's."""
+    out, stack = set(), []
+    for n, ln in enumerate(text.split("\n"), 1):
+        d = ln.strip()
+        if d.startswith("#if"):
+            stack.append(d == "#if NSV_DIAG")
+        elif d.startswith("#el"):  # #else or #elif: NSV_DIAG's #if is never followed by #elif
+            stack[-1] = False
+        elif d.startswith("#endif"):
+            stack.pop()
+        elif any(stack):
+            out.add(n)
+    return out
+
+
+def build(args, text, workdir, config):
     """The unit tests' executable with text as nanosemver.c, or None and the error."""
     cc = os.environ.get("CC", "cc")
     cxx = os.environ.get("CXX", "c++")
@@ -223,24 +248,24 @@ def build(args, text, workdir, int16):
     exe = os.path.join(workdir, "t")
     with open(src, "w") as f:
         f.write(text)
-    cflags = ["-std=c99", "-Os", "-w", "-I" + ROOT] + arch + (INT16 if int16 else [])
+    cflags = ["-std=c99", "-Os", "-w", "-I" + ROOT] + arch + CONFIGS[config][0]
     for cmd in ([cc] + cflags + ["-c", src, "-o", obj],
-                [cxx] + arch + args.objs[int16] + [obj, "-o", exe]):
+                [cxx] + arch + args.objs[config] + [obj, "-o", exe]):
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             return None, r.stderr
     return exe, ""
 
 
-def run_one(args, mutant, workdir):
+def run_one(args, mutant, workdir, configs):
     line, desc, text = mutant
-    for int16 in (False, True):
-        exe, _ = build(args, text, workdir, int16)
+    for config in configs:
+        exe, _ = build(args, text, workdir, config)
         if not exe:
             return (line, desc, "compile")  # not a valid program: neither killed nor kept
         # The quick tests first, which kill most mutants; the slow ones only for what
         # survives them. Either way every test runs before a mutant counts as surviving.
-        for which in ("--test-case-exclude=" + SLOW, "--test-case=" + SLOW):
+        for which in (FIRST[config], REST[config]):
             try:
                 r = subprocess.run([exe, "-m", "--abort-after=1", which], capture_output=True,
                                    timeout=TIMEOUT)
@@ -265,8 +290,8 @@ def main():
         assert 0 <= shard < shards
     except (ValueError, AssertionError):
         sys.exit(f"--shard {args.shard}: want K/N with 0 <= K < N")
-    objs = {False: objects(args.build, False), True: objects(args.build, True)}
-    if not objs[False] or not objs[True]:
+    objs = {c: objects(args.build, c) for c in CONFIGS}
+    if not all(objs.values()):
         sys.exit(f"no test objects under {args.build}; run make first")
     # A snapshot of them, so rebuilding while this runs cannot change what it links.
     snap = tempfile.mkdtemp(prefix="nsv-mutate-objs-")
@@ -274,12 +299,13 @@ def main():
     for k, files in objs.items():
         args.objs[k] = []
         for n, f in enumerate(files):
-            dst = os.path.join(snap, f"{int(k)}-{n}-{os.path.basename(f)}")
+            dst = os.path.join(snap, f"{k}-{n}-{os.path.basename(f)}")
             shutil.copyfile(f, dst)
             args.objs[k].append(dst)
 
     text = open(SRC).read()
     lines = text.split("\n")
+    diag = diag_lines(text)
     equivalent = load_equivalent()
     ms, skipped = [], 0
     for m in mutants(text):
@@ -301,17 +327,17 @@ def main():
     # ARCH) and passes, every mutant would count as unbuildable or killed, and the run
     # would pass having tested nothing.
     with tempfile.TemporaryDirectory(prefix="nsv-mutate-") as d:
-        for int16 in (False, True):
-            exe, err = build(args, text, d, int16)
+        for config in CONFIGS:
+            exe, err = build(args, text, d, config)
             if not exe:
                 sys.exit(f"the unmutated nanosemver.c does not build against {args.build}'s "
-                         f"test objects{' (int16)' if int16 else ''}:\n{err}")
-        if run_one(args, (0, "unmutated", text), d)[2] != "SURVIVED":
+                         f"test objects ({config}):\n{err}")
+        if run_one(args, (0, "unmutated", text), d, list(CONFIGS))[2] != "SURVIVED":
             sys.exit(f"the unit tests in {args.build} fail on the unmutated nanosemver.c")
 
     def one(m):
         with tempfile.TemporaryDirectory(prefix="nsv-mutate-") as d:
-            return run_one(args, m, d)
+            return run_one(args, m, d, ["diag"] if m[0] in diag else ["main", "int16"])
 
     results = []
     with ThreadPoolExecutor(args.jobs) as ex:

@@ -5,11 +5,13 @@ cd /d "%~dp0"
 REM nanosemver with MSVC. Run from a Developer Command Prompt, or after vcvars32.bat /
 REM vcvars64.bat; the target architecture is whatever that environment sets up.
 REM
-REM   build.bat         build and run the unit tests, as configured and as for a small
+REM   build.bat         build and run the unit tests, as configured; as for a small
 REM                     MCU: -DNSV_INT_MAX=32767 (the checks a 16-bit int needs),
-REM                     division by shifts, and nsv_cmp's 32-bit compare; and compile
-REM                     nanosemver.hpp on its own under each C++ standard MSVC has
-REM   build.bat fuzz    then run the standalone fuzz driver (FUZZ_ARGS, default -t 30)
+REM                     division by shifts, and nsv_cmp's 32-bit compare; and with
+REM                     -DNSV_DIAG=1, for its messages; and compile nanosemver.hpp on its
+REM                     own under each C++ standard MSVC has
+REM   build.bat fuzz    then run the standalone fuzz driver, with -DNSV_DIAG=1 (FUZZ_ARGS,
+REM                     default -t 30)
 REM   build.bat clean   delete build\ except the envy package cache
 REM
 REM Set DOCTEST_H to a doctest.h to skip envy, as with the Makefile.
@@ -42,11 +44,12 @@ for %%s in (c++14 c++17 c++20 c++latest) do (
 
 call :unit unit "" "" || exit /b 1
 call :unit int16 "/DNSV_INT_MAX=32767 /DNSV_SOFT_DIV=1 /DNSV_WIDE_CMP=0" "tests\int16\test_int16.cc" || exit /b 1
+call :unit diag "/DNSV_DIAG=1" "tests\diag\test_diag.cc" || exit /b 1
 
 set "DIR=%OUT%\fuzz"
 if not exist %DIR% mkdir %DIR%
-cl %CXXFLAGS% /MP /c tests\fuzz\driver.cc tests\fuzz\check.cc tests\fuzz\gen.cc tests\ref_semver.cc /Fo%DIR%\ || exit /b 1
-link /nologo /out:%DIR%\nsv_fuzz.exe %OUT%\unit\nanosemver.obj %DIR%\*.obj || exit /b 1
+cl %CXXFLAGS% /DNSV_DIAG=1 /MP /c tests\fuzz\driver.cc tests\fuzz\check.cc tests\fuzz\gen.cc tests\ref_semver.cc /Fo%DIR%\ || exit /b 1
+link /nologo /out:%DIR%\nsv_fuzz.exe %OUT%\diag\nanosemver.obj %DIR%\*.obj || exit /b 1
 
 if /i "%~1"=="fuzz" (
   if not defined FUZZ_ARGS set "FUZZ_ARGS=-t 30"
