@@ -34,3 +34,13 @@ dropped: continue; @ continue;  # the range's result is the error already record
 > -> >= @ if (keep > 3u) {  # keep 3 is = and !=, whose EQ already means all three numbers match
 |= -> = @ state |= 1u;  # with bit 0 set the set has failed, whatever bit 1 says
 < -> != @ while ((n < 10u) && (v >= p)) {  # n counts up from 1 by 1
+1 -> 2 @ wild = 1;  # wild is only tested for zero
+0 -> 1 (2nd) @ unsigned glued = 0, partial = 0;  # partial is only read once glued, after a version has set it
+0 -> 1 @ unsigned how = 0; /* only the bits that make a partial version an error matter here */  # nsv_range_op sets those bits, NSV_HOW_WHOLE and NSV_HOW_NOT, whatever how starts as
+64 -> 63 @ char buf[64];  # moves only where the pieces of a message split
+64 -> 65 @ char buf[64];  # moves only where the pieces of a message split
+24 -> 23 @ char col[24]; /* the column in decimal, least significant digit first */  # still room for a 64-bit size_t's 20 digits
+24 -> 25 @ char col[24]; /* the column in decimal, least significant digit first */  # still room for a 64-bit size_t's 20 digits
+> -> >= (2nd) @ char const *const lo = ((b->at - s) > NSV_DIAG_SPAN) ? (b->at - NSV_DIAG_SPAN) : s;  # 32 bytes before b->at is s itself
+> -> >= (2nd) @ char const *const hi = ((e - b->at) > NSV_DIAG_SPAN) ? (b->at + NSV_DIAG_SPAN) : e;  # 32 bytes after b->at is e itself
+< -> != @ for (i = 0; (i < nd) && (col[i] == '9'); ++i) {  # i counts up from 0 by 1, and nd >= 1

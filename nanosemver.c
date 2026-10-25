@@ -176,17 +176,20 @@ syntax:
   return NSV_RET_ERR_SYNTAX;
 }
 
-/* With NSV_DIAG, a parse that fails is walked again, to print where and why. */
+/* With NSV_DIAG, a parse that fails on what it was given, not ERR_ARG, is walked again to
+   print where and why. rc is a variable, so it can be read twice. */
 #if NSV_DIAG
 static int nsv_diag_print_bad_version(int rc, char const *s, size_t len);
 static int nsv_diag_print_bad_range(int rc, char const *s, size_t len);
-#define NSV_DIAG_PRINT_BAD(what, rc, s, len) nsv_diag_print_bad_##what((rc), (s), (len))
+#define NSV_DIAG_PRINT_BAD(what, rc, s, len) \
+  (((rc) < NSV_RET_ERR_ARG) ? nsv_diag_print_bad_##what((rc), (s), (len)) : (rc))
 #else
 #define NSV_DIAG_PRINT_BAD(what, rc, s, len) (rc)
 #endif
 
 int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
-  return NSV_DIAG_PRINT_BAD(version, nsv_parse_to(out, s, len, NULL), s, len);
+  int const rc = nsv_parse_to(out, s, len, NULL);
+  return NSV_DIAG_PRINT_BAD(version, rc, s, len);
 }
 
 int nsv_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
@@ -528,7 +531,8 @@ static int nsv_range_to(char const *s, size_t len, nsv_semver_t const *v, unsign
 }
 
 int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags) {
-  return NSV_DIAG_PRINT_BAD(range, nsv_range_to(s, len, v, flags), s, len);
+  int const rc = nsv_range_to(s, len, v, flags);
+  return NSV_DIAG_PRINT_BAD(range, rc, s, len);
 }
 
 int nsv_copy(void *dst, size_t cap, nsv_semver_t const *s) {
@@ -777,11 +781,11 @@ static void nsv_diag_bad_partial(char const *t, char const *e, char const *o, un
   char const *p = t;
   unsigned i, wild = 0;
   for (i = 0;; ++i) {
-    unsigned const c = (p != e) ? (unsigned char)*p : 0u;
-    if (((c | 0x20u) == 'x') || (c == '*')) {
+    unsigned const digit = (p != e) && nsv_is_digit(*p);
+    if ((p != e) && (((*p | 0x20) == 'x') || (*p == '*'))) {
       wild = 1;
       ++p;
-    } else if (((c - '0') < 10u) && !wild) {
+    } else if (digit && !wild) {
       if (*p++ != '0') {
         while ((p != e) && nsv_is_digit(*p)) {
           ++p;
@@ -789,15 +793,19 @@ static void nsv_diag_bad_partial(char const *t, char const *e, char const *o, un
       }
     } else {
       b->at = p;
-      b->why = ((c - '0') < 10u) ? "number after a wildcard"
-               : i                ? "expected a number or a wildcard"
-                                  : "expected a version";
+      b->why = digit ? "number after a wildcard"
+               : i   ? "expected a number or a wildcard"
+                     : "expected a version";
       return;
     }
     if ((i == 2u) || (p == e) || (*p != '.')) {
       break;
     }
     ++p;
+  }
+  if ((p != e) && nsv_is_digit(*p)) { /* a number cut short by a leading zero */
+    nsv_diag_bad_after(t, p, 1, b);
+    return;
   }
   /* Well formed, so the operator takes no partial version: ==, ~=, ~> or !=. */
   b->at = t;
@@ -816,7 +824,7 @@ static void nsv_diag_bad_limit(int rc, char const *t, nsv_diag_bad_t *b) {
     b->why = "number over 4294967295";
     for (;; ++t) { /* to the first number that does not fit, which there is */
       uint32_t const d = (uint32_t)(unsigned char)*t - '0';
-      if (d >= 10u) {
+      if (!nsv_is_digit(*t)) {
         b->at = t + 1;
         x = 0;
       } else if ((x > 429496729u) || ((x == 429496729u) && (d > 5u))) {
@@ -918,15 +926,14 @@ static void nsv_diag_say(char const *what, char const *s, char const *e,
   nsv_diag_print_fn(nsv_diag_print_ctx, m.buf, m.n);
 }
 
-/* rc from nsv_parse or nsv_parse_prefix on s, which this explains if it is SYNTAX,
-   OVERFLOW or TOO_LONG. */
+/* nsv_parse's or nsv_parse_prefix's rc on s: SYNTAX, OVERFLOW or TOO_LONG, explained. */
 static NSV_NOINLINE int nsv_diag_print_bad_version(int rc, char const *s, size_t len) {
   char const *const e = s + len;
   nsv_diag_bad_t b;
   nsv_semver_t c;
   size_t n;
 
-  if ((rc >= NSV_RET_ERR_ARG) || !nsv_diag_print_fn) {
+  if (!nsv_diag_print_fn) {
     return rc;
   }
   b.quote = NULL;
@@ -943,22 +950,23 @@ static NSV_NOINLINE int nsv_diag_print_bad_version(int rc, char const *s, size_t
   return rc;
 }
 
-/* rc from nsv_range_match on s, explained as nsv_diag_print_bad_version does. Walks the
-   grammar as nsv_range_to does, to the first syntax error, else the first limit. */
+/* nsv_range_match's rc on s, explained the same way: the grammar walked as nsv_range_to
+   walks it, to the first syntax error, or else the first version beyond the limits. */
 static NSV_NOINLINE int nsv_diag_print_bad_range(int rc, char const *s, size_t len) {
   char const *p = s, *const e = s + len, *t = s, *lim = NULL;
   nsv_diag_bad_t b;
 
-  if ((rc >= NSV_RET_ERR_ARG) || !nsv_diag_print_fn) {
+  if (!nsv_diag_print_fn) {
     return rc;
   }
   b.quote = NULL;
   for (;;) {
-    unsigned glued = 0, partial = 0, more = 0;
-    p = nsv_skip_ws(p, e);
+    char const *const set = nsv_skip_ws(p, e);
+    unsigned glued = 0, partial = 0;
+    p = set;
     do {
       char const *const o = p, *q;
-      unsigned how = NSV_BIT_EQ | NSV_HOW_KEEP(3);
+      unsigned how = 0; /* only the bits that make a partial version an error matter here */
       nsv_semver_t c;
       size_t n;
       int r;
@@ -983,7 +991,7 @@ static NSV_NOINLINE int nsv_diag_print_bad_range(int rc, char const *s, size_t l
       if (partial) {
         q = nsv_parse_partial(&c, p, e, &how);
         if (!q) {
-          if (more && (o == t) && (*t == '-') && (t[-1] != ',')) { /* after a space */
+          if ((o != set) && (o == t) && (*t == '-') && (t[-1] != ',')) { /* after a space */
             b.at = t;
             b.why = "hyphen ranges are not supported; use >= and <=";
           } else if (nsv_skip_ws(s, e) == e) {
@@ -1009,7 +1017,6 @@ static NSV_NOINLINE int nsv_diag_print_bad_range(int rc, char const *s, size_t l
       }
       glued = (q == p);
       p = q;
-      more = 1;
     } while ((p != e) && (*p != '|'));
     if (p == e) {
       break;

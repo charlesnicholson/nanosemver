@@ -373,8 +373,8 @@ bad range at column 10: expected a version
 | `>=4294967296` | `bad range at column 3: number over 4294967295` |
 | an empty range | `bad range at column 1: empty range; use * for any version` |
 
-- Nothing else changes: the return values are the same, and a parse that succeeds costs
-  nothing more. One that fails parses the string again, to find where and why.
+- Nothing else changes: the return values are the same, and a parse that succeeds costs a
+  comparison more. One that fails parses the string again, to find where and why.
 - `print` gets each message in one or more pieces, the last ending in `'\n'`. `NULL`, as
   at the start, prints nothing. It is one setting for the whole program, so set it before
   any thread parses. From C++, `nsv::SemVer` and `nsv::SemVerView` print too, through the
