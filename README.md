@@ -343,6 +343,49 @@ Ranges with commas, `==` or comparators run together go to npm respelled as its 
 (`>=1.2 <1.5`, `=1.2.3`, `>=1.0.0 <2.0.0`), and ranges with `!=`, which has no npm
 spelling, are left to the reference tests.
 
+## Error messages
+
+Define `NSV_DIAG` to 1, for `nanosemver.c` and the code that calls it alike, and
+`nsv_diag_set_print(print, ctx)` has every `NSV_RET_ERR_SYNTAX`, `NSV_RET_ERR_OVERFLOW`
+and `NSV_RET_ERR_TOO_LONG` from `nsv_parse`, `nsv_parse_prefix` and `nsv_range_match`
+say where and why, through `print`:
+
+```c
+static void print(void *ctx, char const *s, size_t len) { fwrite(s, 1, len, ctx); }
+
+nsv_diag_set_print(print, stderr);
+nsv_range_match(">=1.0.0 <", 9, &v, 0);  /* NSV_RET_ERR_SYNTAX, and: */
+```
+
+```
+bad range at column 10: expected a version
+  >=1.0.0 <
+           ^
+```
+
+| Version or range | Message |
+|---|---|
+| `1.2.03` | `bad version at column 5: leading zero` |
+| `1.2.3.4` | `bad version at column 6: more than three components` |
+| `1.2.3-rc..1` | `bad version at column 10: expected an identifier` |
+| `1.0.0 - 2.0.0` | `bad range at column 7: hyphen ranges are not supported; use >= and <=` |
+| `~>1.2` | `bad range at column 3: expected a whole version after '~>'` |
+| `>=4294967296` | `bad range at column 3: number over 4294967295` |
+| an empty range | `bad range at column 1: empty range; use * for any version` |
+
+- Nothing else changes: the return values are the same, and a parse that succeeds costs
+  nothing more. One that fails parses the string again, to find where and why.
+- `print` gets each message in one or more pieces, the last ending in `'\n'`. `NULL`, as
+  at the start, prints nothing. It is one setting for the whole program, so set it before
+  any thread parses. From C++, `nsv::SemVer` and `nsv::SemVerView` print too, through the
+  same calls.
+- A message shows up to 32 bytes of the string either side of the fault, with `...` where
+  it is cut, a byte outside printable ASCII as `\xHH`, and a tab as a tab, so the caret
+  lines up under it.
+- `NSV_DIAG` is 0 by default, which leaves out all of it: the function, its pointer, and
+  every string. On a Cortex-M0+ it adds about 2.3 KB, some 640 bytes of that strings, and
+  calls nothing new but `print`.
+
 ## Building
 
 Add `nanosemver.c` to your build, as C; from C++, optionally include `nanosemver.hpp`,
@@ -363,18 +406,18 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI, and without the C++ standard headers |
+| `make` | unit tests, built three times: as configured; as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and with `-DNSV_DIAG=1`, for its messages; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI, and without the C++ standard headers |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
-| `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
-| `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
-| `make libfuzzer` | libFuzzer with ASan and UBSan (Linux clang; Apple clang ships no libFuzzer) |
+| `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in all three configurations |
+| `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler, with `-DNSV_DIAG=1` |
+| `make libfuzzer` | libFuzzer with ASan and UBSan, with `-DNSV_DIAG=1` (Linux clang; Apple clang ships no libFuzzer) |
 | `make bench BENCH_ARGS=--quick` | host timings against `BENCH_BASE`; `--filter cmp` picks workloads |
 | `make bench-cm` | emulated Cortex-M0+ and Cortex-M4 instruction counts and cycles against `BENCH_BASE` |
-| `make size size-check` | Cortex-M code size, and the budget and `memcpy`-only checks |
+| `make size size-check` | Cortex-M size, code, data and strings, with and without `NSV_DIAG`, and the budget and `memcpy`-only checks |
 | `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
 | `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
 | `make mutate MUTATE_ARGS="--jobs 8 --shard 0/4"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |
-| `build.bat [fuzz \| clean]` | the unit tests, both configurations, `nanosemver.hpp` on its own under each C++ standard MSVC has, and optionally the fuzz driver, with MSVC |
+| `build.bat [fuzz \| clean]` | the unit tests, all three configurations, `nanosemver.hpp` on its own under each C++ standard MSVC has, and optionally the fuzz driver, with MSVC |
 
 The tests check `nanosemver.c` against a deliberately naive reference implementation in
 `tests/ref_semver.cc`, which is itself checked against the regular expression semver.org
@@ -404,6 +447,12 @@ every parse, prefix parse, comparison, range match and format against the C func
 own answer, `SemVerInplace` at sizes from 2 bytes to 64 KiB, and views of the longest versions
 there are; whether a version fits, at every size from 2 to 16 and around 48, 64 and 256;
 every error leaving `0.0.0`; and copies that outlive their source string.
+
+With `NSV_DIAG`, `tests/diag/test_diag.cc` holds every message to its exact text, and
+every string of up to five bytes as a version and as a range, and everything the fuzzers
+try, to a check that shares no code with `nanosemver.c`: the message is rebuilt from its
+column and reason, the reason has to fit what is there, and a version's fault has to be
+where the reference implementation's longest valid start of a version ends.
 
 `make mutate` measures all of that: it makes a thousand small changes to
 `nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a

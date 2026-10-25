@@ -10,6 +10,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* 1 compiles in nsv_diag_set_print, for messages that say why a version or range failed to
+   parse; define it for nanosemver.c and its callers alike. 0, the default, leaves out all
+   of it, strings included. */
+#ifndef NSV_DIAG
+#define NSV_DIAG 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -154,6 +161,21 @@ int nsv_format(char *dst, size_t n, nsv_semver_t const *s);
    e.g. printf("%.*s", len, str). */
 int nsv_get_pre(nsv_semver_t const *s, char const **out);
 int nsv_get_build(nsv_semver_t const *s, char const **out);
+
+#if NSV_DIAG
+/* Takes a message in one or more pieces, the last ending in '\n', as fwrite(s, 1, len, ctx)
+   might. */
+typedef void (*nsv_diag_print_t)(void *ctx, char const *s, size_t len);
+
+/* Has each ERR_SYNTAX, ERR_OVERFLOW and ERR_TOO_LONG from nsv_parse, nsv_parse_prefix and
+   nsv_range_match say where and why through print(ctx, ...), until print is NULL, as at
+   the start. Nothing else changes, return values included. It is one setting for the whole
+   program, so set it before any thread parses:
+     bad range at column 10: expected a version
+       >=1.0.0 <
+                ^ */
+void nsv_diag_set_print(nsv_diag_print_t print, void *ctx);
+#endif
 
 #ifdef __cplusplus
 }

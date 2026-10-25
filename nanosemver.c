@@ -176,12 +176,22 @@ syntax:
   return NSV_RET_ERR_SYNTAX;
 }
 
+/* With NSV_DIAG, a parse that fails is walked again, to print where and why. */
+#if NSV_DIAG
+static int nsv_diag_print_bad_version(int rc, char const *s, size_t len);
+static int nsv_diag_print_bad_range(int rc, char const *s, size_t len);
+#define NSV_DIAG_PRINT_BAD(what, rc, s, len) nsv_diag_print_bad_##what((rc), (s), (len))
+#else
+#define NSV_DIAG_PRINT_BAD(what, rc, s, len) (rc)
+#endif
+
 int nsv_parse(nsv_semver_t *out, char const *s, size_t len) {
-  return nsv_parse_to(out, s, len, NULL);
+  return NSV_DIAG_PRINT_BAD(version, nsv_parse_to(out, s, len, NULL), s, len);
 }
 
 int nsv_parse_prefix(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) {
-  return consumed ? nsv_parse_to(out, s, len, consumed) : NSV_RET_ERR_ARG;
+  int const rc = consumed ? nsv_parse_to(out, s, len, consumed) : NSV_RET_ERR_ARG;
+  return NSV_DIAG_PRINT_BAD(version, rc, s, len);
 }
 
 static char const *nsv_base(nsv_semver_t const *s) {
@@ -379,7 +389,54 @@ static NSV_NOINLINE char const *nsv_parse_partial(nsv_semver_t *c, char const *p
   return p;
 }
 
-int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags) {
+/* A comparator's operator at p, folded into *how. Returns its end, p if there is none, or
+   NULL for a '!' alone, or for none where a version just ended (glued). */
+static NSV_INLINE char const *nsv_range_op(char const *p, char const *e, unsigned glued,
+                                           unsigned *how) {
+  char const op = (p != e) ? *p : '\0';
+  /* ^ and ~ also hold MAJOR.MINOR.PATCH to the bound's, ~ through MINOR and ^ through the
+     leftmost nonzero: that is what their upper bounds come to (~1.2.3 is <1.3.0-0, ^0.2.3
+     is <0.3.0-0), without computing one to overflow. */
+  if ((op == '<') || (op == '>')) {
+    *how ^= NSV_BIT_EQ | NSV_HOW_KEEP(3) | ((op == '<') ? NSV_BIT_LT : NSV_BIT_GT);
+    if ((++p != e) && (*p == '=')) {
+      ++p;
+      *how |= NSV_BIT_EQ;
+    }
+  } else if ((op == '^') || (op == '~')) {
+    *how ^= NSV_BIT_GT | NSV_HOW_KEEP(3 ^ ((op == '~') ? 2u : 4u));
+    if ((++p != e) && (op == '~') && ((*p == '=') || (*p == '>'))) {
+      ++p; /* PEP 440's ~= and RubyGems' ~>, which agree with ~ on whole versions */
+      *how |= NSV_HOW_WHOLE;
+    }
+  } else if ((op == '=') || (op == '!')) {
+    /* != and == are not npm's, but PEP 440's and Composer's */
+    if ((++p != e) && (*p == '=')) {
+      ++p;
+      *how |= (op == '!') ? NSV_HOW_NOT : NSV_HOW_WHOLE;
+    } else if (op == '!') {
+      return NULL;
+    }
+  } else if (glued) { /* only an operator may follow a version with nothing between */
+    return NULL;
+  }
+  return p;
+}
+
+/* A version ends at a space, a tab, a comma, a '|', the next comparator's operator or the
+   end. Returns what follows, or NULL for a comma that is not between two comparators. */
+static NSV_INLINE char const *nsv_range_sep(char const *p, char const *e) {
+  p = nsv_skip_ws(p, e);
+  if ((p != e) && (*p == ',')) {
+    p = nsv_skip_ws(p + 1, e);
+    if ((p == e) || (*p == '|')) {
+      return NULL;
+    }
+  }
+  return p;
+}
+
+static int nsv_range_to(char const *s, size_t len, nsv_semver_t const *v, unsigned flags) {
   char const *p, *e;
   int ret = 0; /* 1 once a set matches, or the first OVERFLOW or TOO_LONG */
   unsigned fresh;
@@ -406,41 +463,17 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
                      ((flags & NSV_RANGE_EXCLUDE_PRE) ? NSV_HOW_EXCL : 0u);
       unsigned keep, same;
       int rc;
-      char const op = (p != e) ? *p : '\0';
 
-      /* The operator. ^ and ~ also hold MAJOR.MINOR.PATCH to the bound's, ~ through
-         MINOR and ^ through the leftmost nonzero: that is what their upper bounds come to
-         (~1.2.3 is <1.3.0-0, ^0.2.3 is <0.3.0-0), without computing one to overflow. */
-      if ((op == '<') || (op == '>')) {
-        how ^= NSV_BIT_EQ | NSV_HOW_KEEP(3) | ((op == '<') ? NSV_BIT_LT : NSV_BIT_GT);
-        if ((++p != e) && (*p == '=')) {
-          ++p;
-          how |= NSV_BIT_EQ;
-        }
-      } else if ((op == '^') || (op == '~')) {
-        how ^= NSV_BIT_GT | NSV_HOW_KEEP(3 ^ ((op == '~') ? 2u : 4u));
-        if ((++p != e) && (op == '~') && ((*p == '=') || (*p == '>'))) {
-          ++p; /* PEP 440's ~= and RubyGems' ~>, which agree with ~ on whole versions */
-          how |= NSV_HOW_WHOLE;
-        }
-      } else if ((op == '=') || (op == '!')) {
-        /* != and == are not npm's, but PEP 440's and Composer's */
-        if ((++p != e) && (*p == '=')) {
-          ++p;
-          how |= (op == '!') ? NSV_HOW_NOT : NSV_HOW_WHOLE;
-        } else if (op == '!') {
-          return NSV_RET_ERR_SYNTAX;
-        }
-      } else if (glued) { /* only an operator may follow a version with nothing between */
+      p = nsv_range_op(p, e, glued, &how);
+      if (!p) {
         return NSV_RET_ERR_SYNTAX;
       }
-
       /* A version, npm's v1.2.3 among them, or failing that a partial one. */
       p = nsv_skip_ws(p, e);
       if ((p != e) && (*p == 'v')) {
         ++p;
       }
-      rc = nsv_parse_prefix(&c, p, (size_t)(e - p), &n);
+      rc = nsv_parse_to(&c, p, (size_t)(e - p), &n);
       if (rc == NSV_RET_ERR_SYNTAX) {
         unsigned h = how; /* not how's own address, which would keep it out of a register */
         q = nsv_parse_partial(&c, p, e, &h);
@@ -452,14 +485,9 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
         rc = (how & NSV_HOW_OVF) ? NSV_RET_ERR_OVERFLOW : NSV_RET_OK;
       }
       p += n;
-      q = nsv_skip_ws(p, e);
-      /* A version ends at a space, a tab, a comma, a '|', the next comparator's operator
-         or the end, and a comma stands between two comparators. */
-      if ((q != e) && (*q == ',')) {
-        q = nsv_skip_ws(q + 1, e);
-        if ((q == e) || (*q == '|')) {
-          return NSV_RET_ERR_SYNTAX;
-        }
+      q = nsv_range_sep(p, e);
+      if (!q) {
+        return NSV_RET_ERR_SYNTAX;
       }
       glued = (q == p);
       p = q;
@@ -497,6 +525,10 @@ int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned f
     }
     ++p;
   }
+}
+
+int nsv_range_match(char const *s, size_t len, nsv_semver_t const *v, unsigned flags) {
+  return NSV_DIAG_PRINT_BAD(range, nsv_range_to(s, len, v, flags), s, len);
 }
 
 int nsv_copy(void *dst, size_t cap, nsv_semver_t const *s) {
@@ -669,3 +701,329 @@ int nsv_get_pre(nsv_semver_t const *s, char const **out) {
 int nsv_get_build(nsv_semver_t const *s, char const **out) {
   return s ? nsv_get_span(s, s->build_ofs, s->build_len, out) : NSV_RET_ERR_ARG;
 }
+
+#if NSV_DIAG
+static nsv_diag_print_t nsv_diag_print_fn;
+static void *nsv_diag_print_ctx;
+
+void nsv_diag_set_print(nsv_diag_print_t print, void *ctx) {
+  nsv_diag_print_fn = print;
+  nsv_diag_print_ctx = ctx;
+}
+
+/* What is wrong and where: why, then quote_len bytes of quote in quotes. */
+typedef struct {
+  char const *at, *why, *quote;
+  size_t quote_len;
+} nsv_diag_bad_t;
+
+/* MAJOR.MINOR.PATCH at p: the first fault in them, or NULL if there is none. */
+static char const *nsv_diag_bad_core(char const *p, char const *e, char const **why) {
+  unsigned i;
+  for (i = 0;; ++i) {
+    if ((p == e) || !nsv_is_digit(*p)) {
+      *why = "expected a number";
+      return p;
+    }
+    if ((*p == '0') && ((p + 1) != e) && nsv_is_digit(p[1])) {
+      *why = "leading zero";
+      return p;
+    }
+    while ((p != e) && nsv_is_digit(*p)) {
+      ++p;
+    }
+    if (i == 2u) {
+      return NULL;
+    }
+    if ((p == e) || (*p != '.')) {
+      *why = "expected '.'";
+      return p;
+    }
+    ++p;
+  }
+}
+
+/* Why the version [t, p), partial or not, cannot go on into the byte at p. */
+static void nsv_diag_bad_after(char const *t, char const *p, unsigned partial,
+                               nsv_diag_bad_t *b) {
+  unsigned const c = (unsigned char)*p;
+  unsigned ids = 0, build = 0; /* whether it has a pre-release or build, and a build */
+  for (; t != p; ++t) {
+    ids |= (*t == '-') || (*t == '+');
+    build |= (*t == '+');
+  }
+  b->at = p;
+  if (nsv_is_digit(*p)) { /* where a number stopped short */
+    b->at = p - (p[-1] == '0');
+    b->why = (p[-1] == '0') ? "leading zero" : "number after a wildcard";
+  } else if (c == '.') {
+    b->at = p + ids;
+    b->why = ids ? "expected an identifier" : "more than three components";
+  } else if (((c == '-') || (c == '+')) && partial) {
+    b->why = "pre-release or build on a partial version";
+  } else if ((c == '-') || ((c == '+') && !build)) {
+    b->at = p + 1;
+    b->why = (c == '-') ? "expected a pre-release" : "expected build metadata";
+  } else {
+    b->why = "unexpected ";
+    b->quote = p;
+    b->quote_len = 1;
+  }
+}
+
+/* Why the version at t, after the operator at o, is neither whole nor partial. */
+static void nsv_diag_bad_partial(char const *t, char const *e, char const *o, unsigned how,
+                                 nsv_diag_bad_t *b) {
+  char const *p = t;
+  unsigned i, wild = 0;
+  for (i = 0;; ++i) {
+    unsigned const c = (p != e) ? (unsigned char)*p : 0u;
+    if (((c | 0x20u) == 'x') || (c == '*')) {
+      wild = 1;
+      ++p;
+    } else if (((c - '0') < 10u) && !wild) {
+      if (*p++ != '0') {
+        while ((p != e) && nsv_is_digit(*p)) {
+          ++p;
+        }
+      }
+    } else {
+      b->at = p;
+      b->why = ((c - '0') < 10u) ? "number after a wildcard"
+               : i                ? "expected a number or a wildcard"
+                                  : "expected a version";
+      return;
+    }
+    if ((i == 2u) || (p == e) || (*p != '.')) {
+      break;
+    }
+    ++p;
+  }
+  /* Well formed, so the operator takes no partial version: ==, ~=, ~> or !=. */
+  b->at = t;
+  b->why = (how & NSV_HOW_NOT) ? "expected a whole version or a wildcard after "
+                               : "expected a whole version after ";
+  b->quote = o;
+  b->quote_len = 2;
+}
+
+/* The version at t, OVERFLOW or TOO_LONG as rc says: the number too big, or the whole. */
+static void nsv_diag_bad_limit(int rc, char const *t, nsv_diag_bad_t *b) {
+  b->at = t;
+  b->why = "version longer than 65535 bytes";
+  if (rc == NSV_RET_ERR_OVERFLOW) {
+    uint32_t x = 0;
+    b->why = "number over 4294967295";
+    for (;; ++t) { /* to the first number that does not fit, which there is */
+      uint32_t const d = (uint32_t)(unsigned char)*t - '0';
+      if (d >= 10u) {
+        b->at = t + 1;
+        x = 0;
+      } else if ((x > 429496729u) || ((x == 429496729u) && (d > 5u))) {
+        return;
+      } else {
+        x = (x * 10u) + d;
+      }
+    }
+  }
+}
+
+/* A message, passed to nsv_diag_print_fn a buffer at a time. */
+typedef struct {
+  char buf[64];
+  size_t n;
+} nsv_diag_msg_t;
+
+static void nsv_diag_msg_c(nsv_diag_msg_t *m, char c) {
+  if (m->n == sizeof(m->buf)) {
+    nsv_diag_print_fn(nsv_diag_print_ctx, m->buf, m->n);
+    m->n = 0;
+  }
+  m->buf[m->n++] = c;
+}
+
+static void nsv_diag_msg_s(nsv_diag_msg_t *m, char const *s) {
+  while (*s) {
+    nsv_diag_msg_c(m, *s++);
+  }
+}
+
+/* A byte of the input: printable ASCII as itself, a tab too unless quoted, else \xHH. BLANK
+   is a space instead, under bytes before the fault, which are all printable or tabs. */
+enum { NSV_DIAG_ECHO, NSV_DIAG_QUOTE, NSV_DIAG_BLANK };
+
+static void nsv_diag_msg_byte(nsv_diag_msg_t *m, char c, unsigned mode) {
+  unsigned const u = (unsigned char)c;
+  if ((u == '\t') && (mode != NSV_DIAG_QUOTE)) {
+    nsv_diag_msg_c(m, '\t');
+  } else if ((u - 0x20u) < 0x5Fu) {
+    nsv_diag_msg_c(m, (mode == NSV_DIAG_BLANK) ? ' ' : c);
+  } else {
+    nsv_diag_msg_s(m, "\\x");
+    nsv_diag_msg_c(m, "0123456789abcdef"[u >> 4]);
+    nsv_diag_msg_c(m, "0123456789abcdef"[u & 15u]);
+  }
+}
+
+#define NSV_DIAG_SPAN 32 /* bytes of the input shown either side of the fault */
+
+/* Prints "bad <what> at column N: <why>", then the input around the fault, with a caret
+   under it. */
+static void nsv_diag_say(char const *what, char const *s, char const *e,
+                         nsv_diag_bad_t const *b) {
+  nsv_diag_msg_t m;
+  char col[24]; /* the column in decimal, least significant digit first */
+  size_t nd = 1, i;
+  char const *const lo = ((b->at - s) > NSV_DIAG_SPAN) ? (b->at - NSV_DIAG_SPAN) : s;
+  char const *const hi = ((e - b->at) > NSV_DIAG_SPAN) ? (b->at + NSV_DIAG_SPAN) : e;
+  char const *p;
+
+  col[0] = '1';
+  for (p = s; p != b->at; ++p) { /* counted up, which needs no division */
+    for (i = 0; (i < nd) && (col[i] == '9'); ++i) {
+      col[i] = '0';
+    }
+    if (i == nd) {
+      col[nd++] = '1';
+    } else {
+      ++col[i];
+    }
+  }
+  m.n = 0;
+  nsv_diag_msg_s(&m, "bad ");
+  nsv_diag_msg_s(&m, what);
+  nsv_diag_msg_s(&m, " at column ");
+  while (nd) {
+    nsv_diag_msg_c(&m, col[--nd]);
+  }
+  nsv_diag_msg_s(&m, ": ");
+  nsv_diag_msg_s(&m, b->why);
+  if (b->quote) {
+    nsv_diag_msg_c(&m, '\'');
+    for (p = b->quote; p != (b->quote + b->quote_len); ++p) {
+      nsv_diag_msg_byte(&m, *p, NSV_DIAG_QUOTE);
+    }
+    nsv_diag_msg_c(&m, '\'');
+  }
+  nsv_diag_msg_s(&m, (lo != s) ? "\n  ..." : "\n  ");
+  for (p = lo; p != hi; ++p) {
+    nsv_diag_msg_byte(&m, *p, NSV_DIAG_ECHO);
+  }
+  nsv_diag_msg_s(&m, (hi != e) ? "...\n  " : "\n  ");
+  nsv_diag_msg_s(&m, (lo != s) ? "   " : "");
+  for (p = lo; p != b->at; ++p) {
+    nsv_diag_msg_byte(&m, *p, NSV_DIAG_BLANK);
+  }
+  nsv_diag_msg_s(&m, "^\n");
+  nsv_diag_print_fn(nsv_diag_print_ctx, m.buf, m.n);
+}
+
+/* rc from nsv_parse or nsv_parse_prefix on s, which this explains if it is SYNTAX,
+   OVERFLOW or TOO_LONG. */
+static NSV_NOINLINE int nsv_diag_print_bad_version(int rc, char const *s, size_t len) {
+  char const *const e = s + len;
+  nsv_diag_bad_t b;
+  nsv_semver_t c;
+  size_t n;
+
+  if ((rc >= NSV_RET_ERR_ARG) || !nsv_diag_print_fn) {
+    return rc;
+  }
+  b.quote = NULL;
+  if (rc != NSV_RET_ERR_SYNTAX) {
+    nsv_diag_bad_limit(rc, s, &b);
+  } else {
+    b.at = nsv_diag_bad_core(s, e, &b.why);
+    if (!b.at) { /* the numbers are fine, so the version is cut short */
+      nsv_parse_to(&c, s, len, &n);
+      nsv_diag_bad_after(s, s + n, 0, &b);
+    }
+  }
+  nsv_diag_say("version", s, e, &b);
+  return rc;
+}
+
+/* rc from nsv_range_match on s, explained as nsv_diag_print_bad_version does. Walks the
+   grammar as nsv_range_to does, to the first syntax error, else the first limit. */
+static NSV_NOINLINE int nsv_diag_print_bad_range(int rc, char const *s, size_t len) {
+  char const *p = s, *const e = s + len, *t = s, *lim = NULL;
+  nsv_diag_bad_t b;
+
+  if ((rc >= NSV_RET_ERR_ARG) || !nsv_diag_print_fn) {
+    return rc;
+  }
+  b.quote = NULL;
+  for (;;) {
+    unsigned glued = 0, partial = 0, more = 0;
+    p = nsv_skip_ws(p, e);
+    do {
+      char const *const o = p, *q;
+      unsigned how = NSV_BIT_EQ | NSV_HOW_KEEP(3);
+      nsv_semver_t c;
+      size_t n;
+      int r;
+
+      q = nsv_range_op(p, e, glued, &how);
+      if (!q) {
+        if (*p == '!') {
+          b.at = p + 1;
+          b.why = "expected '=' after '!'";
+        } else {
+          nsv_diag_bad_after(t, p, partial, &b);
+        }
+        goto say;
+      }
+      p = nsv_skip_ws(q, e);
+      if ((p != e) && (*p == 'v')) {
+        ++p;
+      }
+      t = p;
+      r = nsv_parse_to(&c, p, (size_t)(e - p), &n);
+      partial = (r == NSV_RET_ERR_SYNTAX);
+      if (partial) {
+        q = nsv_parse_partial(&c, p, e, &how);
+        if (!q) {
+          if (more && (o == t) && (*t == '-') && (t[-1] != ',')) { /* after a space */
+            b.at = t;
+            b.why = "hyphen ranges are not supported; use >= and <=";
+          } else if (nsv_skip_ws(s, e) == e) {
+            b.at = s;
+            b.why = "empty range; use * for any version";
+          } else {
+            nsv_diag_bad_partial(t, e, o, how, &b);
+          }
+          goto say;
+        }
+        n = (size_t)(q - p);
+        r = (how & NSV_HOW_OVF) ? NSV_RET_ERR_OVERFLOW : NSV_RET_OK;
+      }
+      if (r && !lim) {
+        lim = t;
+      }
+      p += n;
+      q = nsv_range_sep(p, e);
+      if (!q) {
+        b.at = nsv_skip_ws(nsv_skip_ws(p, e) + 1, e);
+        b.why = "expected a comparator after ','";
+        goto say;
+      }
+      glued = (q == p);
+      p = q;
+      more = 1;
+    } while ((p != e) && (*p != '|'));
+    if (p == e) {
+      break;
+    }
+    if ((++p == e) || (*p != '|')) {
+      b.at = p - 1;
+      b.why = "expected '||'";
+      goto say;
+    }
+    ++p;
+  }
+  nsv_diag_bad_limit(rc, lim, &b);
+say:
+  nsv_diag_say("range", s, e, &b);
+  return rc;
+}
+#endif

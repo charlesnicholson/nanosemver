@@ -162,7 +162,7 @@ jobs:
         with:
           path: build/envy-cache
           key: envy-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('envy.lua') }}
-      - name: 100% of nanosemver.c, in both int configurations
+      - name: 100% of nanosemver.c, in all three configurations
         run: make -j"$(nproc)" CC=clang CXX=clang++ coverage
       - name: Annotated source
         if: always()

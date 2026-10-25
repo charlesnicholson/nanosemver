@@ -20,21 +20,23 @@
 #   V=1             echo full commands
 #
 # Targets:
-#   test        (default) the unit tests, built twice: as configured, and as for a
+#   test        (default) the unit tests, built three times: as configured; as for a
 #               small MCU like an AVR, whose 16-bit int needs the length checks that
 #               -DNSV_INT_MAX=32767 compiles in, division by shifts, and nsv_cmp's
-#               32-bit compare; and nanosemver.hpp compiled on its own as C++11 to
-#               C++23, with and without exceptions and RTTI, and without the C++
-#               standard headers
-#   fuzz        the standalone fuzz driver; any compiler
-#   libfuzzer   clang libFuzzer with ASan and UBSan; Apple clang ships no libFuzzer
+#               32-bit compare; and with -DNSV_DIAG=1, for its messages. And
+#               nanosemver.hpp compiled on its own as C++11 to C++23, with and without
+#               exceptions and RTTI, and without the C++ standard headers
+#   fuzz        the standalone fuzz driver, with -DNSV_DIAG=1; any compiler
+#   libfuzzer   clang libFuzzer with ASan and UBSan, with -DNSV_DIAG=1; Apple clang
+#               ships no libFuzzer
 #   coverage    clang source coverage of nanosemver.c; fails unless 100%
 #   bench       this tree against BENCH_BASE, both in one binary, timed interleaved
 #   bench-cm    instructions and estimated cycles per call on emulated Cortex-M0+ and
 #               Cortex-M4, against BENCH_BASE
-#   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function
-#   size-check  fails if the code outgrows size-budget.mk or calls into libc or libgcc
-#               for anything but memcpy
+#   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function, and
+#               in all with -DNSV_DIAG=1
+#   size-check  fails if the code, with or without NSV_DIAG, outgrows size-budget.mk or
+#               calls into libc or libgcc for anything but memcpy
 #   ratchet     size-check, and fails if any Cortex-M workload takes more cycles than
 #               bench/cm/ratchet.txt allows
 #   ratchet-update  lowers size-budget.mk and bench/cm/ratchet.txt to what the code now
@@ -123,17 +125,21 @@ CXXFLAGS := -std=c++20 $(WARN) $(WARN_CXX) $(OPT) $(ARCH_FLAGS) $(SAN_FLAGS) $(E
             $(DOCTEST_INC)
 LDFLAGS  := $(ARCH_FLAGS) $(SAN_FLAGS) $(EXTRA_FLAGS)
 INT16_DEFS := -DNSV_INT_MAX=32767 -DNSV_SOFT_DIV=1 -DNSV_WIDE_CMP=0
+DIAG_DEFS := -DNSV_DIAG=1
 
 # --- sources ----------------------------------------------------------------------
 # Globbed, so a new test file needs no registration here; build.bat globs the same.
 FUZZ_LIB_SRCS := tests/fuzz/check.cc tests/fuzz/gen.cc
 UNIT_SRCS := nanosemver.c $(sort $(wildcard tests/*.c) $(wildcard tests/*.cc)) $(FUZZ_LIB_SRCS)
 INT16_SRCS := $(UNIT_SRCS) tests/int16/test_int16.cc
+DIAG_SRCS := $(UNIT_SRCS) tests/diag/test_diag.cc
 FUZZ_SRCS := nanosemver.c tests/fuzz/driver.cc tests/ref_semver.cc $(FUZZ_LIB_SRCS)
 
 UNIT_OBJS := $(patsubst %,$(BUILD)/%.o,$(UNIT_SRCS))
 INT16_OBJS := $(patsubst %,$(BUILD)/int16/%.o,$(INT16_SRCS))
-FUZZ_OBJS := $(patsubst %,$(BUILD)/%.o,$(FUZZ_SRCS))
+DIAG_OBJS := $(patsubst %,$(BUILD)/diag/%.o,$(DIAG_SRCS))
+# The fuzz driver checks the messages too, so it builds as the diag tests do.
+FUZZ_OBJS := $(patsubst %,$(BUILD)/diag/%.o,$(FUZZ_SRCS))
 # nanosemver.c also has to build as C11, and nanosemver.hpp on its own under every C++
 # standard from C++11, with and without exceptions and RTTI, though nothing links those
 # objects. Outside $(BUILD)/tests, where tests/mutate.py would link them.
@@ -142,7 +148,7 @@ HPP_SRC := tests/hpp/standalone.cc
 HPP_STDS := c++11 c++14 c++17 c++20 c++23
 HPP_OBJS := $(patsubst %,$(BUILD)/hpp/%.o,$(HPP_STDS))
 HPP_NOEXC_OBJS := $(patsubst %,$(BUILD)/hpp/%-noexcept.o,$(HPP_STDS))
-ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ) $(HPP_OBJS) \
+ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(DIAG_OBJS) $(FUZZ_OBJS) $(C11_OBJ) $(HPP_OBJS) \
                    $(HPP_NOEXC_OBJS))
 
 # --- rules ------------------------------------------------------------------------
@@ -150,8 +156,8 @@ ALL_OBJS := $(sort $(UNIT_OBJS) $(INT16_OBJS) $(FUZZ_OBJS) $(C11_OBJ) $(HPP_OBJS
         npm-check mutate clean FORCE
 .DEFAULT_GOAL := test
 
-test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(C11_OBJ) $(HPP_OBJS) \
-      $(HPP_NOEXC_OBJS)
+test: $(BUILD)/nsv_unittests.ok $(BUILD)/nsv_unittests_int16.ok $(BUILD)/nsv_unittests_diag.ok \
+      $(C11_OBJ) $(HPP_OBJS) $(HPP_NOEXC_OBJS)
 
 $(BUILD)/int16/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
@@ -162,6 +168,16 @@ $(BUILD)/int16/%.cc.o: %.cc Makefile
 	@mkdir -p $(dir $@)
 	$(MSG) CXX "$< (int16)"
 	$(Q)$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INT16_DEFS) -c $< -o $@
+
+$(BUILD)/diag/%.c.o: %.c Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< (diag)"
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) $(DIAG_DEFS) -c $< -o $@
+
+$(BUILD)/diag/%.cc.o: %.cc Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CXX "$< (diag)"
+	$(Q)$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DIAG_DEFS) -c $< -o $@
 
 $(BUILD)/c11/%.c.o: %.c Makefile
 	@mkdir -p $(dir $@)
@@ -200,6 +216,10 @@ $(BUILD)/nsv_unittests_int16: $(INT16_OBJS)
 	$(MSG) LINK $@
 	$(Q)$(CXX) $(LDFLAGS) $^ -o $@
 
+$(BUILD)/nsv_unittests_diag: $(DIAG_OBJS)
+	$(MSG) LINK $@
+	$(Q)$(CXX) $(LDFLAGS) $^ -o $@
+
 $(BUILD)/nsv_fuzz: $(FUZZ_OBJS)
 	$(MSG) LINK $@
 	$(Q)$(CXX) $(LDFLAGS) $^ -o $@
@@ -223,7 +243,7 @@ fuzz: $(BUILD)/nsv_fuzz
 LF_BUILD := build/libfuzzer
 LF_CC ?= clang
 LF_CXX ?= clang++
-LF_FLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -I.
+LF_FLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -I. $(DIAG_DEFS)
 LF_SRCS := nanosemver.c tests/fuzz/libfuzzer.cc tests/fuzz/check.cc tests/ref_semver.cc
 LF_OBJS := $(patsubst %,$(LF_BUILD)/%.o,$(LF_SRCS))
 LIBFUZZER_ARGS ?= -max_total_time=60
@@ -252,7 +272,7 @@ libfuzzer: $(LF_BUILD)/nsv_libfuzzer $(LF_BUILD)/corpus/.seeded
 
 # --- coverage ---------------------------------------------------------------------
 # Line, region, function and branch coverage of nanosemver.c, required to be 100% in
-# each test binary on its own. Two configurations of one source cannot share a
+# each test binary on its own, the diag one's of the code NSV_DIAG adds too. Two configurations of one source cannot share a
 # report: llvm-cov drops one side's counts as "mismatched data".
 # The tools that match the compiler, since the profile format is version-specific.
 LLVM_PROFDATA ?= $(shell $(CC) -print-prog-name=llvm-profdata)
@@ -281,9 +301,10 @@ endef
 coverage:
 	$(Q)$(MAKE) --no-print-directory BUILD=$(COV_BUILD) CFG=Debug SAN= \
 		EXTRA_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
-		$(COV_BUILD)/nsv_unittests $(COV_BUILD)/nsv_unittests_int16
+		$(COV_BUILD)/nsv_unittests $(COV_BUILD)/nsv_unittests_int16 $(COV_BUILD)/nsv_unittests_diag
 	$(call cov_check,nsv_unittests)
 	$(call cov_check,nsv_unittests_int16)
+	$(call cov_check,nsv_unittests_diag)
 
 # --- benchmarks -------------------------------------------------------------------
 BENCH_BASE ?= origin/main
@@ -376,6 +397,12 @@ $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o: $(CM_BUILD)/%.o: nanosemver.c nanosemver.h Ma
 	$(MSG) CC "$< ($(call cm_cpu,$*))"
 	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) -I. -c $< -o $@
 
+$(CM_BUILD)/m0-diag.o $(CM_BUILD)/m4-diag.o: $(CM_BUILD)/%-diag.o: nanosemver.c nanosemver.h \
+		Makefile
+	@mkdir -p $(dir $@)
+	$(MSG) CC "$< ($(call cm_cpu,$*), diag)"
+	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) $(DIAG_DEFS) -I. -c $< -o $@
+
 # Bare images for bench/cm/cmcount.py, which calls the API directly. newlib-nano and
 # libgcc supply whatever the code pulls in, and count with it.
 CM_LINK := -specs=nano.specs -nostartfiles -T bench/cm/link.ld -Wl,--gc-sections \
@@ -402,20 +429,28 @@ bench-cm: $(foreach c,m0 m4,$(CM_BUILD)/base-$(c).elf $(CM_BUILD)/new-$(c).elf)
 			$(CM_BUILD)/base-$$c.elf $(CM_BUILD)/new-$$c.elf || exit 1; \
 	done
 
-# Total bytes of code and data in object $(1), or a failure.
-cm_bytes = "$(ARM_NM)" --print-size --radix=d $(1) | \
-	awk 'NF == 4 { s += $$2 } END { if (!s) exit 1; print s }'
+# Total bytes of code, data and strings in object $(1), or a failure. Sections, not
+# symbols, so the strings count too: with NSV_DIAG, its messages.
+cm_bytes = "$(ARM_OBJDUMP)" -h $(1) | awk '$$2 ~ /^\.(text|rodata|data|bss)/ { \
+		for (i = 1; i <= length($$3); i++) n = n * 16 + index("0123456789abcdef", substr($$3, i, 1)) - 1; \
+		s += n; n = 0 } END { if (!s) exit 1; print s }'
 
-size: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
+CM_OBJS := $(foreach c,m0 m4 m0-diag m4-diag,$(CM_BUILD)/$(c).o)
+
+size: $(CM_OBJS)
 	@for c in m0 m4; do \
 		echo; echo "> arm-none-eabi-gcc -mcpu=$$( [ $$c = m0 ] && echo cortex-m0plus || echo cortex-m4 ) $(CM_FLAGS) -c nanosemver.c"; \
-		"$(ARM_NM)" --print-size --size-sort --radix=d $(CM_BUILD)/$$c.o | \
-			awk 'NF == 4 { printf "  %5d  %s\n", $$2, $$4; s += $$2 } END { printf "  %5d  total\n", s }'; \
+		t=$$($(call cm_bytes,$(CM_BUILD)/$$c.o)) || exit 1; \
+		"$(ARM_NM)" --print-size --size-sort --radix=d $(CM_BUILD)/$$c.o | awk -v t=$$t \
+			'NF == 4 { printf "  %5d  %s\n", $$2, $$4; s += $$2 } \
+			 END { printf "  %5d  strings and padding\n  %5d  total\n", t - s, t }'; \
 		echo "  calls: $$("$(ARM_NM)" --undefined-only $(CM_BUILD)/$$c.o | awk '{ printf "%s ", $$2 }')"; \
+		echo "  $$($(call cm_bytes,$(CM_BUILD)/$$c-diag.o)) total with $(DIAG_DEFS)"; \
 	done
 
-size-check: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
-	@for c in m0:$(NSV_SIZE_M0_MAX) m4:$(NSV_SIZE_M4_MAX); do \
+size-check: $(CM_OBJS)
+	@for c in m0:$(NSV_SIZE_M0_MAX) m4:$(NSV_SIZE_M4_MAX) m0-diag:$(NSV_SIZE_M0_DIAG_MAX) \
+			m4-diag:$(NSV_SIZE_M4_DIAG_MAX); do \
 		o=$(CM_BUILD)/$${c%%:*}.o; max=$${c#*:}; \
 		t=$$($(call cm_bytes,$$o)) || { echo "$$o: no size"; exit 1; }; \
 		echo "$$o: $$t bytes (budget $$max)"; \
@@ -438,9 +473,8 @@ ratchet: size-check $(CM_BUILD)/new-m0.elf $(CM_BUILD)/new-m4.elf
 			--ratchet $(RATCHET) $(CM_BUILD)/new-$$c.elf || exit 1; \
 	done
 
-ratchet-update: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o $(CM_BUILD)/new-m0.elf \
-		$(CM_BUILD)/new-m4.elf
-	@for c in m0:M0 m4:M4; do \
+ratchet-update: $(CM_OBJS) $(CM_BUILD)/new-m0.elf $(CM_BUILD)/new-m4.elf
+	@for c in m0:M0 m4:M4 m0-diag:M0_DIAG m4-diag:M4_DIAG; do \
 		v=NSV_SIZE_$${c#*:}_MAX; t=$$($(call cm_bytes,$(CM_BUILD)/$${c%%:*}.o)) || exit 1; \
 		old=$$(sed -n "s/^$$v := //p" size-budget.mk); \
 		if [ $$t -gt $$old ]; then echo "$$v: $$t is over $$old"; exit 1; fi; \
@@ -481,9 +515,10 @@ npm-check: $(NPM_BUILD)/nsv_npm_emit
 
 # --- mutation testing ---------------------------------------------------------------
 # One change at a time to nanosemver.c, each built against this configuration's test
-# objects, both ways, and for its ARCH. uv provides the Python.
+# objects, both int ways or, under #if NSV_DIAG, the diag way, and for its ARCH. uv
+# provides the Python.
 MUTATE_ARGS ?=
-mutate: $(BUILD)/nsv_unittests $(BUILD)/nsv_unittests_int16
+mutate: $(BUILD)/nsv_unittests $(BUILD)/nsv_unittests_int16 $(BUILD)/nsv_unittests_diag
 ifneq ($(SAN),)
 	$(error mutants link without the sanitizer runtime; build without SAN)
 endif
