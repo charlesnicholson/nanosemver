@@ -109,16 +109,17 @@ library or the heap, and builds without exceptions or RTTI.
 ```cpp
 #include "nanosemver.hpp"
 
-nsv::SemVer<> v, w;  // 0.0.0; 64 bytes for the pre-release and build, in place
-if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
-w.parse("1.4.0");
+int rc;
+nsv::SemVer<> const v = nsv::SemVer<>::from("1.4.0-rc.2+g3f9a1c2", rc);  // 64 bytes in place
+if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
+nsv::SemVer<> const w = nsv::SemVer<>::from("1.4.0", rc);
 bool const older = v < w;  // true: a pre-release ranks below its release
 int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0 on error
 char buf[32];
 int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
 char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
-nsv::SemVer<8> small;  // 8 bytes: too few for these two strings and their NULs
-int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
+// 8 bytes: too few for these two strings and their NULs, so NSV_RET_ERR_BUF_TOO_SMALL
+nsv::SemVer<8> const small = nsv::SemVer<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
 ```
 
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
@@ -130,12 +131,13 @@ int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
   the source lies in the version itself, as when parsing its own `pre()`: `nsv_copy` may
   not copy over its own source, so that alone goes through a temporary `SemVer<N>`, out
   of line, and takes its size in stack.
-- `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
-  does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
-  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer<N>::from(c, rc)` makes a new
-  version of one, its error in `rc`; there is no constructor from one, since a
-  constructor could not report that error. (`NSV_SEMVER_LIT` itself needs C++20 in C++,
-  for its designated initializers.)
+- `from(s, rc)` takes a NUL-terminated string and `from(s, len, rc)` a length, as
+  `nsv_parse` does; `from_prefix(s, len, n, rc)` is `nsv_parse_prefix`; and `from(c, rc)`
+  copies any `nsv_semver_t`, a view, copy or literal. Each makes a new version, with its
+  error in `rc` and `0.0.0` on error; none is a constructor, since a constructor could not
+  report the error. `parse(s)`, `parse(s, len)`, `parse_prefix(s, len, n)` and `assign(c)`
+  replace an existing version instead, returning the error and leaving the version as it
+  was. (`NSV_SEMVER_LIT` itself needs C++20 in C++, for its designated initializers.)
 - `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, between versions of
   any sizes, so `==` ignores build metadata: `1.0.0+a == 1.0.0+b`.
 - `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
@@ -149,17 +151,19 @@ int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
   `memcpy`, and there is nothing to free. One size takes another's version through
   `assign(other.semver())`.
 
-`nsv::SemVerView` has the same members, one header in size, but for `pre()` and `build()`,
-which are the string's own bytes and so are not NUL-terminated:
+`nsv::SemVerView` has the same members, one header in size, but for two. There is no
+`from(c, rc)`, since a copy's header does not point at its strings; a `SemVer<N>` converts
+to a view instead. And `pre()` and `build()` are the string's own bytes, so not
+NUL-terminated:
 
 ```cpp
 char const tag[] = "1.4.0-rc.2+g3f9a1c2";  // must outlive the view
-nsv::SemVerView v;  // 0.0.0
-if (v.parse(tag) != NSV_RET_OK) { /* not a version: v is unchanged */ }
+int rc;
+nsv::SemVerView const v = nsv::SemVerView::from(tag, rc);
+if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
 char const *pre;
 size_t const n = v.pre(pre);  // 4: "rc.2", then "+g3f9a1c2": tag's own bytes
 bool const newer = v > nsv::SemVer<>();  // true: views and SemVers compare
-int rc;
 nsv::SemVer<> const kept = nsv::SemVer<>::from(v.semver(), rc);  // a copy, to outlive tag
 ```
 

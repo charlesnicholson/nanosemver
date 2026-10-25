@@ -12,6 +12,12 @@
   }                                                                                     \
   int nsv_stack_assign_##NAME(T &v, nsv_semver_t const &s) { return v.assign(s); }      \
   T nsv_stack_from_##NAME(nsv_semver_t const &s, int &rc) { return T::from(s, rc); }    \
+  T nsv_stack_from_s_##NAME(char const *s, size_t n, int &rc) {                         \
+    return T::from(s, n, rc);                                                           \
+  }                                                                                     \
+  T nsv_stack_from_prefix_##NAME(char const *s, size_t n, size_t &consumed, int &rc) {  \
+    return T::from_prefix(s, n, consumed, rc);                                          \
+  }                                                                                     \
   int nsv_stack_view_##NAME(T const &v, char const *range) {                            \
     nsv::SemVerView const w = v;                                                        \
     return w.matches(range);                                                            \

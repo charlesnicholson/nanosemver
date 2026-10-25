@@ -13,6 +13,12 @@ int nsv_hpp_members(char const *s, size_t len) {
   int rc = 0;
   nsv::SemVer<N> b = nsv::SemVer<N>::from(a.semver(), rc);
   r += rc;
+  nsv::SemVer<N> const e = nsv::SemVer<N>::from(s, len, rc);
+  r += rc + static_cast<int>(e.major());
+  nsv::SemVer<N> const f = nsv::SemVer<N>::from(s, rc);
+  r += rc + static_cast<int>(f.major());
+  nsv::SemVer<N> const g = nsv::SemVer<N>::from_prefix(s, len, consumed, rc);
+  r += rc + static_cast<int>(g.major());
   r += b.assign(a.semver());
   nsv::SemVer<N> c(b);
   c = a;
@@ -33,6 +39,13 @@ inline int nsv_hpp_view(char const *s, size_t len) {
   int r = a.parse(s, len) + a.parse(s) + a.parse_prefix(s, len, consumed);
   nsv::SemVerView b(a);
   b = a;
+  int rc = 0;
+  nsv::SemVerView const d = nsv::SemVerView::from(s, len, rc);
+  r += rc + static_cast<int>(d.major());
+  nsv::SemVerView const e = nsv::SemVerView::from(s, rc);
+  r += rc + static_cast<int>(e.major());
+  nsv::SemVerView const f = nsv::SemVerView::from_prefix(s, len, consumed, rc);
+  r += rc + static_cast<int>(f.major());
   nsv::SemVer<> const owned;
   nsv::SemVerView const c = owned;
 

@@ -1,5 +1,6 @@
 /* nanosemver @NSV_VERSION@: nsv::SemVer, a C++ version that owns its strings, and
-   nsv::SemVerView, one that views the string it was parsed from, over nanosemver.h. https://github.com/charlesnicholson/nanosemver
+   nsv::SemVerView, one that views the string it was parsed from, over nanosemver.h.
+   https://github.com/charlesnicholson/nanosemver
    charles.nicholson+nanosemver@gmail.com
    dual-licensed under 0bsd and unlicense, take your pick. see LICENSE for details. */
 /* SPDX-License-Identifier: Unlicense OR 0BSD */
@@ -46,9 +47,10 @@ static_assert(detail::same(NSV_VERSION, "0.0.0"),
    view from nsv_parse, a version never dangles, as it needs nothing of the string it came
    from. N bytes hold every version of up to N + 4 characters, and a longer one whose
    pre-release and build fit; one that does not fit is NSV_RET_ERR_BUF_TOO_SMALL. A version
-   is plain bytes: copying or moving one copies them, and there is nothing to free. A
-   default-constructed version is 0.0.0. What can fail returns an NSV_RET_* code and leaves
-   *this unmodified on error. Where a version need not outlive its string, SemVerView, below,
+   is plain bytes: copying or moving one copies them, and there is nothing to free. from and
+   from_prefix make a version, with any error in rc; parse and the rest replace one,
+   returning an NSV_RET_* code and leaving *this unmodified on error. A default-constructed
+   version is 0.0.0. Where a version need not outlive its string, SemVerView, below,
    copies nothing and has no length cap. */
 template <size_t N = 64>
 class SemVer {
@@ -64,6 +66,23 @@ class SemVer {
   static SemVer from(nsv_semver_t const &s, int &rc) noexcept {
     SemVer v;
     rc = v.assign(s);
+    return v;
+  }
+  /* The version in s[0, len), or the NUL-terminated s, through parse: rc is what parse
+     returns, and on error the version is 0.0.0. */
+  static SemVer from(char const *s, size_t len, int &rc) noexcept {
+    SemVer v;
+    rc = v.parse(s, len);
+    return v;
+  }
+  static SemVer from(char const *s, int &rc) noexcept {
+    return from(s, detail::length(s), rc);
+  }
+  /* The version at the start of s[0, len), through parse_prefix: rc and consumed are what
+     it gives, and on error the version is 0.0.0. */
+  static SemVer from_prefix(char const *s, size_t len, size_t &consumed, int &rc) noexcept {
+    SemVer v;
+    rc = v.parse_prefix(s, len, consumed);
     return v;
   }
 
@@ -172,14 +191,16 @@ class SemVer {
     nsv_semver_t v;
     char s[N];
   } b_;
-  static_assert(offsetof(blob, s) == sizeof(nsv_semver_t), "strings right after the header");
+  static_assert(offsetof(blob, s) == sizeof(nsv_semver_t), "strings after the header");
 };
 
 /* A version that views the string it was parsed from, as nsv_parse's does: nothing is
    copied and nothing caps its length, but the string must outlive the view. Where a
    version has to outlive its string, use SemVer<N>. A view is one header, plain bytes:
-   copying it copies the view, not the string. A default-constructed view is 0.0.0. What can
-   fail returns an NSV_RET_* code and leaves *this unmodified on error. */
+   copying it copies the view, not the string. Made and replaced as a SemVer is, from a
+   string; a default-constructed view is 0.0.0. There is no from(nsv_semver_t): a copy's
+   header does not point at its strings, so it has no view to give, but a SemVer<N>
+   converts to one. */
 class SemVerView {
  public:
   constexpr SemVerView() noexcept : v_() {}
@@ -189,6 +210,26 @@ class SemVerView {
   template <size_t N>
   SemVerView(SemVer<N> const &v) noexcept : v_(v.semver()) {
     v_.src = v.pre() - v_.pre_ofs;  // a copy's strings, where a view's src points
+  }
+
+  /* A view of the version in s[0, len), or the NUL-terminated s, through nsv_parse: rc is
+     NSV_RET_OK, or ERR_ARG / ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, and on error the
+     view is 0.0.0. */
+  static SemVerView from(char const *s, size_t len, int &rc) noexcept {
+    SemVerView v;
+    rc = v.parse(s, len);
+    return v;
+  }
+  static SemVerView from(char const *s, int &rc) noexcept {
+    return from(s, detail::length(s), rc);
+  }
+  /* A view of the version at the start of s[0, len), through nsv_parse_prefix: rc and
+     consumed are what it gives, and on error the view is 0.0.0. */
+  static SemVerView from_prefix(char const *s, size_t len, size_t &consumed,
+                                int &rc) noexcept {
+    SemVerView v;
+    rc = v.parse_prefix(s, len, consumed);
+    return v;
   }
 
   /* nsv_parse of s[0, len), viewing s. Returns NSV_RET_OK, or ERR_ARG / ERR_SYNTAX /
@@ -211,7 +252,9 @@ class SemVerView {
      and in s where it starts in the string viewed, or "" if absent; never NULL. Not
      NUL-terminated, as it is the string's own bytes: use the length. */
   size_t pre(char const *&s) const noexcept { return span(v_.pre_ofs, v_.pre_len, s); }
-  size_t build(char const *&s) const noexcept { return span(v_.build_ofs, v_.build_len, s); }
+  size_t build(char const *&s) const noexcept {
+    return span(v_.build_ofs, v_.build_len, s);
+  }
 
   /* nsv_format, as SemVer<N>'s. */
   int format(char *dst, size_t n) const noexcept { return nsv_format(dst, n, &v_); }

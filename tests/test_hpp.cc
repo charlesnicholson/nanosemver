@@ -52,6 +52,15 @@ static_assert(noexcept(std::declval<V &>().parse("")), "");
 static_assert(noexcept(std::declval<V &>().parse_prefix("", 0, std::declval<size_t &>())), "");
 static_assert(noexcept(std::declval<V &>().assign(nsv_semver_t{})), "");
 static_assert(noexcept(V::from(nsv_semver_t{}, std::declval<int &>())), "");
+static_assert(noexcept(V::from("", 0, std::declval<int &>())), "");
+static_assert(noexcept(V::from("", std::declval<int &>())), "");
+static_assert(noexcept(V::from_prefix("", 0, std::declval<size_t &>(), std::declval<int &>())),
+              "");
+static_assert(std::is_same<decltype(V::from("", std::declval<int &>())), V>::value, "");
+static_assert(std::is_same<decltype(SemVer<8>::from_prefix("", 0, std::declval<size_t &>(),
+                                                           std::declval<int &>())),
+                           SemVer<8>>::value,
+              "");
 static_assert(noexcept(std::declval<V const &>().matches("", 0)), "");
 static_assert(noexcept(std::declval<V const &>().format(nullptr, 0)), "");
 static_assert(noexcept(std::declval<V const &>() < std::declval<SemVer<8> const &>()), "");
@@ -65,6 +74,14 @@ static_assert(std::is_nothrow_constructible<SemVerView, V const &>::value, "a Se
 static_assert(std::is_convertible<SemVer<2> const &, SemVerView>::value, "any size's");
 static_assert(!std::is_constructible<SemVerView, nsv_semver_t const &>::value, "a copy's?");
 static_assert(!std::is_constructible<V, SemVerView const &>::value, "only assign()");
+static_assert(noexcept(SemVerView::from("", 0, std::declval<int &>())), "");
+static_assert(noexcept(SemVerView::from("", std::declval<int &>())), "");
+static_assert(noexcept(SemVerView::from_prefix("", 0, std::declval<size_t &>(),
+                                               std::declval<int &>())),
+              "");
+static_assert(std::is_same<decltype(SemVerView::from("", std::declval<int &>())),
+                           SemVerView>::value,
+              "");
 static_assert(noexcept(std::declval<SemVerView &>().parse("", 0)), "");
 static_assert(noexcept(std::declval<SemVerView &>().parse("")), "");
 static_assert(noexcept(std::declval<SemVerView &>().parse_prefix("", 0,
@@ -348,6 +365,58 @@ void append(std::vector<std::string> &out, char const *const (&list)[N]) {
   out.insert(out.end(), std::begin(list), std::end(list));
 }
 
+// Every corpus string, valid or not, and each valid one with something after it.
+std::vector<std::string> corpus_inputs() {
+  std::vector<std::string> inputs;
+  append(inputs, corpus::k_valid);
+  append(inputs, corpus::k_invalid);
+  append(inputs, corpus::k_overflow);
+  for (char const *p : corpus::k_valid) {
+    for (char const *tail : { " ", ", 2.0.0", " || 1", ".4", "x", "-", "+", "..", "-+" }) {
+      inputs.push_back(std::string(p) + tail);
+    }
+  }
+  return inputs;
+}
+
+// SemVer<N>::from and from_prefix on every corpus input, against nsv_parse and
+// nsv_parse_prefix: the version, or 0.0.0 and the error, in rc.
+template <size_t N>
+void factories() {
+  INFO("SemVer<", N, ">");
+  static nsv_test::guarded g, gn;
+  for (std::string const &s : corpus_inputs()) {
+    INFO("\"", s, "\"");
+    char const *const at = g.place(s);
+    char const *const nul = place_nul(gn, s);
+    nsv_semver_t c{};
+    int const want = expect<N>(nsv_parse(&c, at, s.size()), c);
+    for (int with_len = 0; with_len < 2; ++with_len) {
+      int rc = 1;
+      SemVer<N> const v =
+          with_len ? SemVer<N>::from(at, s.size(), rc) : SemVer<N>::from(nul, rc);
+      REQUIRE(rc == want);
+      if (want == NSV_RET_OK) {
+        same(v, c);
+      } else {
+        REQUIRE(state(v) == state(SemVer<N>()));
+      }
+    }
+    nsv_semver_t pc{};
+    size_t cn = 12345, n = 54321;
+    int const pwant = expect<N>(nsv_parse_prefix(&pc, at, s.size(), &cn), pc);
+    int rc = 1;
+    SemVer<N> const p = SemVer<N>::from_prefix(at, s.size(), n, rc);
+    REQUIRE(rc == pwant);
+    REQUIRE(n == cn);
+    if (pwant == NSV_RET_OK) {
+      same(p, pc);
+    } else {
+      REQUIRE(state(p) == state(SemVer<N>()));
+    }
+  }
+}
+
 template <size_t N>
 void default_is_zero() {
   INFO("SemVer<", N, ">");
@@ -493,16 +562,7 @@ template <size_t N>
 void parse_prefix_corpus() {
   INFO("SemVer<", N, ">");
   static nsv_test::guarded g;
-  std::vector<std::string> inputs;
-  append(inputs, corpus::k_valid);
-  append(inputs, corpus::k_invalid);
-  append(inputs, corpus::k_overflow);
-  for (char const *p : corpus::k_valid) {
-    for (char const *tail : { " ", ", 2.0.0", " || 1", ".4", "x", "-", "+", "..", "-+" }) {
-      inputs.push_back(std::string(p) + tail);
-    }
-  }
-  for (std::string const &s : inputs) {
+  for (std::string const &s : corpus_inputs()) {
     INFO("\"", s, "\"");
     nsv_semver_t c{};
     size_t cn = 12345;
@@ -720,6 +780,30 @@ TEST_CASE("nsv::SemVer: parsing its own strings") {
     over.src = w.pre();
     return w.assign(over);
   });
+}
+
+TEST_CASE("nsv::SemVer: from and from_prefix, against nsv_parse and nsv_parse_prefix") {
+  factories<2>();
+  factories<8>();
+  factories<64>();
+  factories<256>();
+
+  int rc = 1;
+  REQUIRE(state(V::from(nullptr, 5, rc)) == state(V()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  rc = 1;
+  REQUIRE(state(V::from(nullptr, rc)) == state(V()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  size_t n = 7;
+  rc = 1;
+  REQUIRE(state(V::from_prefix(nullptr, 5, n, rc)) == state(V()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  REQUIRE(n == 7);
+  std::string const huge = "1.0.0-" + std::string(65530, 'p');  // 65536 bytes
+  REQUIRE(state(V::from(huge.c_str(), rc)) == state(V()));
+  REQUIRE(rc == NSV_RET_ERR_TOO_LONG);
+  REQUIRE(str(V::from("1.2.3-rc.1junk", 10, rc)) == "1.2.3-rc.1");  // only what it is given
+  REQUIRE(rc == NSV_RET_OK);
 }
 
 TEST_CASE("nsv::SemVer: strings from in, at and around the version itself") {
@@ -1262,16 +1346,17 @@ TEST_CASE("nsv::SemVer: accessors") {
 
 TEST_CASE("nsv::SemVer: README example") {
   // README.md's C++ example, line for line.
-  nsv::SemVer<> v, w;  // 0.0.0; 64 bytes for the pre-release and build, in place
-  if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
-  w.parse("1.4.0");
+  int rc;
+  nsv::SemVer<> const v = nsv::SemVer<>::from("1.4.0-rc.2+g3f9a1c2", rc);  // 64 bytes in place
+  if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
+  nsv::SemVer<> const w = nsv::SemVer<>::from("1.4.0", rc);
   bool const older = v < w;  // true: a pre-release ranks below its release
   int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0 on error
   char buf[32];
   int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
   char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
-  nsv::SemVer<8> small;  // 8 bytes: too few for these two strings and their NULs
-  int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
+  // 8 bytes: too few for these two strings and their NULs, so NSV_RET_ERR_BUF_TOO_SMALL
+  nsv::SemVer<8> const small = nsv::SemVer<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
 
   REQUIRE(str(v) == "1.4.0-rc.2+g3f9a1c2");
   REQUIRE(str(w) == "1.4.0");
@@ -1403,16 +1488,7 @@ TEST_CASE("nsv::SemVerView: parse reads only what it is given") {
 
 TEST_CASE("nsv::SemVerView: parse_prefix, against nsv_parse_prefix") {
   static nsv_test::guarded g;
-  std::vector<std::string> inputs;
-  append(inputs, corpus::k_valid);
-  append(inputs, corpus::k_invalid);
-  append(inputs, corpus::k_overflow);
-  for (char const *p : corpus::k_valid) {
-    for (char const *tail : { " ", ", 2.0.0", " || 1", ".4", "x", "-", "+", "..", "-+" }) {
-      inputs.push_back(std::string(p) + tail);
-    }
-  }
-  for (std::string const &s : inputs) {
+  for (std::string const &s : corpus_inputs()) {
     INFO("\"", s, "\"");
     char const *const at = g.place(s);
     nsv_semver_t c{};
@@ -1434,6 +1510,60 @@ TEST_CASE("nsv::SemVerView: parse_prefix, against nsv_parse_prefix") {
       });
     }
   }
+}
+
+TEST_CASE("nsv::SemVerView: from and from_prefix, against nsv_parse and nsv_parse_prefix") {
+  static nsv_test::guarded g, gn;
+  for (std::string const &s : corpus_inputs()) {
+    INFO("\"", s, "\"");
+    char const *const at = g.place(s);
+    char const *const nul = place_nul(gn, s);
+    nsv_semver_t c{}, cnul{};
+    int const want = nsv_parse(&c, at, s.size());
+    REQUIRE(nsv_parse(&cnul, nul, s.size()) == want);
+    int rc = 1;
+    SemVerView const v = SemVerView::from(at, s.size(), rc);
+    REQUIRE(rc == want);
+    rc = 1;
+    SemVerView const w = SemVerView::from(nul, rc);
+    REQUIRE(rc == want);
+    if (want == NSV_RET_OK) {
+      same_view(v, c);
+      same_view(w, cnul);
+    } else {
+      REQUIRE(view_state(v) == view_state(SemVerView()));
+      REQUIRE(view_state(w) == view_state(SemVerView()));
+    }
+    nsv_semver_t pc{};
+    size_t cn = 12345, n = 54321;
+    int const pwant = nsv_parse_prefix(&pc, at, s.size(), &cn);
+    rc = 1;
+    SemVerView const p = SemVerView::from_prefix(at, s.size(), n, rc);
+    REQUIRE(rc == pwant);
+    REQUIRE(n == cn);
+    if (pwant == NSV_RET_OK) {
+      same_view(p, pc);
+    } else {
+      REQUIRE(view_state(p) == view_state(SemVerView()));
+    }
+  }
+
+  int rc = 1;
+  REQUIRE(view_state(SemVerView::from(nullptr, 5, rc)) == view_state(SemVerView()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  rc = 1;
+  REQUIRE(view_state(SemVerView::from(nullptr, rc)) == view_state(SemVerView()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  size_t n = 7;
+  rc = 1;
+  REQUIRE(view_state(SemVerView::from_prefix(nullptr, 5, n, rc)) == view_state(SemVerView()));
+  REQUIRE(rc == NSV_RET_ERR_ARG);
+  REQUIRE(n == 7);
+  char const junk[] = "1.2.3-rc.1junk";
+  SemVerView const v = SemVerView::from(junk, 10, rc);  // only what it is given
+  REQUIRE(rc == NSV_RET_OK);
+  REQUIRE(str(v) == "1.2.3-rc.1");
+  REQUIRE(v.semver().src == junk);
 }
 
 TEST_CASE("nsv::SemVerView: pre and build are the string's own bytes") {
@@ -1591,12 +1721,12 @@ TEST_CASE("nsv::SemVerView: copies view the same string, and a SemVer outlives i
 TEST_CASE("nsv::SemVerView: README example") {
   // README.md's SemVerView example, line for line.
   char const tag[] = "1.4.0-rc.2+g3f9a1c2";  // must outlive the view
-  nsv::SemVerView v;  // 0.0.0
-  if (v.parse(tag) != NSV_RET_OK) { /* not a version: v is unchanged */ }
+  int rc;
+  nsv::SemVerView const v = nsv::SemVerView::from(tag, rc);
+  if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
   char const *pre;
   size_t const n = v.pre(pre);  // 4: "rc.2", then "+g3f9a1c2": tag's own bytes
   bool const newer = v > nsv::SemVer<>();  // true: views and SemVers compare
-  int rc;
   nsv::SemVer<> const kept = nsv::SemVer<>::from(v.semver(), rc);  // a copy, to outlive tag
 
   REQUIRE(n == 4);
