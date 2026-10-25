@@ -1066,14 +1066,18 @@ TEST_CASE("nsv::SemVer: comparisons on generated versions") {
     REQUIRE(v.parse(s.data(), s.size()) == expect<256>(rc, c));
     V d;
     REQUIRE(d.parse(s.data(), s.size()) == expect<64>(rc, c));
+    SemVer<16> e;
+    REQUIRE(e.parse(s.data(), s.size()) == expect<16>(rc, c));
     if (rc == NSV_RET_OK) {
       vs.push_back(v);
       strs.push_back(s);
-      too_big += (need(c) > 64);
+      too_big += (need(c) > 16);
     }
   }
   REQUIRE(vs.size() > 300);
-  REQUIRE(too_big > 10);  // so the default size's refusals are tested too
+  // So refusals are tested too, which at the default size are few, and how few depends on
+  // the order the compiler calls the generator's arguments in.
+  REQUIRE(too_big > 50);
   for (size_t i = 0; i < vs.size(); ++i) {
     for (size_t j = i; j < vs.size(); ++j) {
       INFO(strs[i], " against ", strs[j]);
