@@ -41,11 +41,8 @@ jobs:
         run: |
           test "$(./release.sh v12.34.56-ci.7 build/release)" = prerelease
           head -1 build/release/nanosemver.h | grep -q '^/\* nanosemver v12.34.56-ci.7:'
-          printf '%s\n' '#include "nanosemver.h"' \
-            '#if NSV_VERSION_MAJOR != 12 || NSV_VERSION_MINOR != 34 || NSV_VERSION_PATCH != 56' \
-            '#error the version macros are not stamped' '#endif' > build/release/stamp.c
-          cc -std=c99 -Wall -Werror -c build/release/stamp.c -o /dev/null
-          grep -qx '#define NSV_VERSION "12.34.56-ci.7"' build/release/nanosemver.h
+          grep -qx '#define NSV_VERSION_LIT NSV_SEMVER_LIT(12, 34, 56, "ci.7", "")' \
+            build/release/nanosemver.h
           head -1 build/release/nanosemver.hpp | grep -q '^/\* nanosemver v12.34.56-ci.7:'
           printf '%s\n' '#include "nanosemver.hpp"' > build/release/stamp.cc
           c++ -std=c++11 -Wall -Werror -fno-exceptions -fno-rtti -c build/release/stamp.cc -o /dev/null
@@ -60,6 +57,14 @@ jobs:
               echo "the v12.34.56-ci.7 nanosemver.hpp built against $h" >&2
               exit 1
             fi
+          done
+          # Each stamped NSV_VERSION_LIT formats to exactly its tag's version.
+          ./release.sh v1.0.0-a-b.c+d-e.f build/release-build > /dev/null
+          for t in 12.34.56-ci.7:release 12.34.56:release-final 1.0.0-a-b.c+d-e.f:release-build; do
+            d="build/${t#*:}"
+            cc -std=c99 -Wall -Wextra -Werror -I"$d" tests/release/version_check.c \
+              "$d/nanosemver.c" -o "$d/version_check"
+            "$d/version_check" "${t%%:*}"
           done
           unzip -l build/release/nanosemver-v12.34.56-ci.7.zip
           unzip -p build/release/nanosemver-v12.34.56-ci.7.zip nanosemver-v12.34.56-ci.7/nanosemver.h \

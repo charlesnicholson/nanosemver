@@ -7,9 +7,11 @@
 
 static nsv_semver_t const k_full = NSV_SEMVER_LIT(1, 4, 0, "rc.2", "g3f9a1c2");
 static nsv_semver_t const k_bare = NSV_SEMVER_LIT(2, 0, 0, "", "");
+static nsv_semver_t const k_version = NSV_VERSION_LIT;
 
 nsv_semver_t const *lit_c_full(void) { return &k_full; }
 nsv_semver_t const *lit_c_bare(void) { return &k_bare; }
+nsv_semver_t const *lit_c_version(void) { return &k_version; }
 
 static int ver_qsort_cmp(void const *a, void const *b) {
   return nsv_cmp((nsv_semver_t const *)a, (nsv_semver_t const *)b) - 1;
@@ -53,9 +55,9 @@ int lit_c_static_copy(char *out, size_t n) {
 int lit_c_range_check(void) {
   static char const range[] = ">=1.2.0 <1.4.0 || ^2.1.0";
   static char const text[] = "1.3.0-rc.1, and so on";
-  static char const version[] = NSV_VERSION;
   nsv_semver_t v;
   size_t n = 0;
+  char buf[256];
   if ((nsv_parse_prefix(&v, text, sizeof(text) - 1, &n) != NSV_RET_OK) || (n != 10)) {
     return 0;
   }
@@ -70,9 +72,9 @@ int lit_c_range_check(void) {
       (nsv_range_match("^1.4", 4, &k_full, NSV_RANGE_EXCLUDE_PRE) != 0)) {
     return 0;
   }
-  if (nsv_parse(&v, version, sizeof(version) - 1) != NSV_RET_OK) {
+  if ((nsv_format(buf, sizeof(buf), &k_version) < 0) ||
+      (nsv_parse(&v, buf, strlen(buf)) != NSV_RET_OK)) {
     return 0;
   }
-  return (v.major == NSV_VERSION_MAJOR) && (v.minor == NSV_VERSION_MINOR) &&
-         (v.patch == NSV_VERSION_PATCH);
+  return nsv_cmp(&v, &k_version) == NSV_CMP_EQ;
 }

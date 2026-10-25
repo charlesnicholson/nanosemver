@@ -94,51 +94,76 @@ and 65535-byte strings. A syntax error always takes precedence, so `OVERFLOW` an
 ## C++
 
 `nanosemver.hpp` is optional and C++ only: a header over the C API, with `nanosemver.c`
-still built as C. Its `nsv::SemVer<N>` holds its own copy in place, the header and an
-`N`-byte array for the pre-release and build strings, 48 bytes by default, so it never
-allocates and never dangles the way a view can. Errors come back without exceptions:
-whatever can fail returns an `NSV_RET_*` code and leaves the version as it was. It needs
-C++11 or later and nothing from the standard library or the heap, and builds without
-exceptions or RTTI.
+still built as C. It has two kinds of version, which compare with each other:
+
+- `nsv::SemVer` holds its own copy in place, the header and a 64-byte array for the
+  pre-release and build strings, so it never allocates and never dangles: for a version
+  that has to outlive the string it came from. `nsv::SemVerInplace<N>` is the same with `N`
+  bytes; `SemVer` is `SemVerInplace<64>`.
+- `nsv::SemVerView` is `nsv_parse`'s view: nothing copied, no length cap, but the string
+  must outlive it: for a version parsed, used and dropped while its string is at hand.
+
+It needs C++11 or later, no heap, exceptions, RTTI or C++ standard library, and from the
+C library only `strlen`, through `<string.h>`, so it builds where there are no C++
+standard headers at all, as with avr-g++.
 
 ```cpp
 #include "nanosemver.hpp"
 
-nsv::SemVer<> v, w;  // 0.0.0; 48 bytes for the pre-release and build, in place
-if (v.parse("1.4.0-rc.2+g3f9a1c2") != NSV_RET_OK) { /* not a version: v is unchanged */ }
-w.parse("1.4.0");
+int rc;
+nsv::SemVer const v = nsv::SemVer::from("1.4.0-rc.2+g3f9a1c2", rc);  // 64 B in place
+if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
+nsv::SemVer const w = nsv::SemVer::from("1.4.0", rc);
 bool const older = v < w;  // true: a pre-release ranks below its release
 int const in = v.matches(">=1.2.0 <2.0.0 || ^3.1.0");  // 1 if so, 0 if not, < 0 on error
 char buf[32];
 int const len = v.format(buf, sizeof buf);  // 19: "1.4.0-rc.2+g3f9a1c2"
-char const *pre = v.pre(), *build = v.build();  // "rc.2" and "g3f9a1c2"
-nsv::SemVer<8> small;  // 8 bytes: too few for these two strings and their NULs
-int const rc = small.parse("1.4.0-rc.2+g3f9a1c2");  // NSV_RET_ERR_BUF_TOO_SMALL
+char const *pre;
+int const n = v.pre(pre);  // 4: "rc.2", NUL-terminated
+// 8 bytes: too few for these two strings and their NULs, so NSV_RET_ERR_BUF_TOO_SMALL
+nsv::SemVerInplace<8> const small = nsv::SemVerInplace<8>::from("1.4.0-rc.2+g3f9a1c2", rc);
 ```
 
+```cpp
+char const tag[] = "1.4.0-rc.2+g3f9a1c2";  // must outlive the view
+int rc;
+nsv::SemVerView const v = nsv::SemVerView::from(tag, rc);
+if (rc != NSV_RET_OK) { /* not a version: v is 0.0.0 */ }
+char const *pre;
+int const n = v.pre(pre);  // 4: "rc.2", then "+g3f9a1c2": tag's own bytes
+bool const newer = v > nsv::SemVer();  // true: views and SemVers compare
+nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outlive tag
+```
+
+- `from(s, rc)` takes a NUL-terminated string and `from(s, len, rc)` a length, as
+  `nsv_parse` does, and `from_prefix(s, len, n, rc)` is `nsv_parse_prefix`. `from(c, rc)`
+  takes an `nsv_semver_t`: a `SemVerInplace<N>` copies any, a view, copy or literal, and a
+  `SemVerView` views a view or literal, but not a copy, whose header does not point at
+  its strings (`NSV_RET_ERR_ARG`). Each makes a new version, with its error in `rc` and
+  `0.0.0` on error. (`NSV_SEMVER_LIT` itself needs C++20 in C++, for its designated
+  initializers.)
+- Each returns a temporary, which C++17 requires, and older compilers choose, to build in
+  the variable it initializes, so a `SemVerInplace<N>` takes no stack for its `N` bytes.
+  To replace a version, assign it another: that builds the new one first and copies it
+  over, so it does take the version's size in stack.
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
   `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
   longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
-  version is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment: 80 by
-  default on 64-bit targets, and 72 on 32-bit ones.
-- `parse(s)` takes a NUL-terminated string and `parse(s, len)` a length, as `nsv_parse`
-  does; `parse_prefix(s, len, n)` is `nsv_parse_prefix`. `assign(c)` copies any
-  `nsv_semver_t`, a view, copy or literal, and `nsv::SemVer<N>::from(c, rc)` makes a new
-  version of one, its error in `rc`; there is no constructor from one, since a
-  constructor could not report that error. (`NSV_SEMVER_LIT` itself needs C++20 in C++,
-  for its designated initializers.)
-- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, between versions of
-  any sizes, so `==` ignores build metadata: `1.0.0+a == 1.0.0+b`.
+  `SemVerInplace<N>` is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment,
+  so a `SemVer` is 96 on 64-bit targets and 88 on 32-bit ones. A `SemVerView` is the
+  header.
+- `==`, `!=`, `<`, `<=`, `>` and `>=` are `nsv_cmp`'s precedence, between any two
+  versions, so `==` ignores build metadata: `1.0.0+a == 1.0.0+b`.
 - `matches(range)`, NUL-terminated and without flags, and `matches(range, len, flags)`
   return what `nsv_range_match` does: 1, 0, or an `NSV_RET_ERR_*` code. Test for `== 1`,
   since an error is nonzero too.
-- `major()`, `minor()` and `patch()` are the numbers; `pre()` and `build()` are
-  NUL-terminated, and `""` when absent; `format(dst, n)` is `nsv_format`.
-- `semver()` is the version for the C API: pass `&v.semver()`, but never copy it, since
-  it is a copy's header.
-- A version is plain bytes, trivially copyable: copying or moving one copies them, even by
-  `memcpy`, and there is nothing to free. One size takes another's version through
-  `assign(other.semver())`.
+- `major()`, `minor()` and `patch()` are the numbers; `pre(p)` and `build(p)` are
+  `nsv_get_pre` and `nsv_get_build`, the length with `p` at the bytes, NUL-terminated in
+  a `SemVerInplace<N>` and the string's own in a view; `format(dst, n)` is `nsv_format`.
+- `semver()` is the version for the C API: pass `&v.semver()`. A `SemVerInplace<N>`'s is a
+  copy's header, so never copy it, as its strings would stay behind.
+- Either is plain bytes, trivially copyable: copying or moving one copies them, even by
+  `memcpy`, and there is nothing to free. A copied view views the same string.
 
 ## Comparing versions
 
@@ -338,7 +363,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 
 | Command | Does |
 |---|---|
-| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI |
+| `make` | unit tests, built twice: as configured, and as for a small MCU, with `-DNSV_INT_MAX=32767` to reach the checks a 16-bit `int` needs, division by shifts, and `nsv_cmp`'s 32-bit compare; and `nanosemver.hpp` compiled on its own as C++11, 14, 17, 20 and 23, with and without exceptions and RTTI, and without the C++ standard headers |
 | `make CC=gcc CXX=g++ CFG=Debug ARCH=32 SAN=address,undefined` | any compiler, configuration, width and sanitizer |
 | `make coverage` | clang source coverage; fails unless every region, line and branch of `nanosemver.c` is covered, in both configurations |
 | `make fuzz FUZZ_ARGS="-t 60"` | the standalone fuzz driver, which runs with any compiler |
@@ -374,11 +399,11 @@ repetition change nothing, a set of bounds admits an unbroken run of versions,
 `NSV_RANGE_EXCLUDE_PRE` only ever removes matches and never from a release, and build
 metadata on the version never matters.
 
-`tests/test_hpp.cc` holds `nsv::SemVer` to the C API under it: every parse, prefix parse,
-comparison, range match and format against the C function's own answer, at sizes from 2
-bytes to 64 KiB; whether a version fits, at and around every size up to 16 and the
-default; every error leaving the version as it was; and copies that outlive their source
-string.
+`tests/test_hpp.cc` holds `nsv::SemVer` and `nsv::SemVerView` to the C API under them:
+every parse, prefix parse, comparison, range match and format against the C function's
+own answer, `SemVerInplace` at sizes from 2 bytes to 64 KiB, and views of the longest versions
+there are; whether a version fits, at every size from 2 to 16 and around 48, 64 and 256;
+every error leaving `0.0.0`; and copies that outlive their source string.
 
 `make mutate` measures all of that: it makes a thousand small changes to
 `nanosemver.c`, each a flipped comparison, an off-by-one constant, a swapped operator or a
@@ -392,11 +417,12 @@ Push a tag like `v1.2.0` (or `v1.2.0-rc.1`, published as a pre-release). CI runs
 whole matrix against it and, only if everything passes, `release.sh` stamps the tag
 into `nanosemver.h` and `nanosemver.hpp` and publishes them as a GitHub release, alongside
 `nanosemver.c` and a zip of the full source carrying the same stamped headers. The stamp
-is the first line of each, and in `nanosemver.h`, `NSV_VERSION_MAJOR`,
-`NSV_VERSION_MINOR`, `NSV_VERSION_PATCH` and the string `NSV_VERSION` (`"1.2.0-rc.1"`),
-for code that reports or checks which nanosemver it has; a stamped `nanosemver.hpp`
-refuses to build against any other release's `nanosemver.h`. The checked-in headers keep
-their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever bumps a version.
+is the first line of each, and in `nanosemver.h`, `NSV_VERSION_LIT`
+(`NSV_SEMVER_LIT(1, 2, 0, "rc.1", "")`): `nsv_semver_t const v = NSV_VERSION_LIT;` makes
+a version of it, for code that compares or reports which nanosemver it has. A stamped
+`nanosemver.hpp` refuses to build against any other release's `nanosemver.h`. The
+checked-in headers keep their `@NSV_VERSION@` placeholder and 0.0.0, so no commit ever
+bumps a version.
 `./release.sh v1.2.0` shows locally what a tag would ship.
 
 ## License

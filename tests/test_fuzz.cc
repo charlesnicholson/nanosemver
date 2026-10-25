@@ -4,6 +4,7 @@
 #include "fuzz/gen.h"
 #include "nsv_doctest.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -47,5 +48,26 @@ TEST_CASE("fuzz: generated inputs") {
   nsv_fuzz::rng r(20261023);
   for (int i = 0; i < 100000; ++i) {
     run(nsv_fuzz::gen_input(r));
+  }
+}
+
+TEST_CASE("fuzz: every compiler generates the same inputs") {
+  // FNV-1a of 20000 inputs per seed. A mismatch on one compiler means a draw order left
+  // to it in gen.cc; a deliberate change to gen.cc changes these too.
+  struct {
+    std::uint64_t seed, hash;
+  } const want[] = { { 1, 0xf68ee11dcf064c0eull },
+                     { 0x6e737668707021ull, 0xe6b8d8b1797f415eull } };
+  for (auto const &w : want) {
+    nsv_fuzz::rng r(w.seed);
+    std::uint64_t h = 0xcbf29ce484222325ull;
+    for (int i = 0; i < 20000; ++i) {
+      for (char c : nsv_fuzz::gen_input(r)) {
+        h = (h ^ static_cast<unsigned char>(c)) * 0x100000001b3ull;
+      }
+      h = (h ^ 0xffu) * 0x100000001b3ull;  // between inputs
+    }
+    INFO("seed ", w.seed);
+    REQUIRE(h == w.hash);
   }
 }
