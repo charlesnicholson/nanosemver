@@ -44,3 +44,5 @@ dropped: continue; @ continue;  # the range's result is the error already record
 > -> >= (2nd) @ char const *const lo = ((b->at - s) > NSV_DIAG_SPAN) ? (b->at - NSV_DIAG_SPAN) : s;  # 32 bytes before b->at is s itself
 > -> >= (2nd) @ char const *const hi = ((e - b->at) > NSV_DIAG_SPAN) ? (b->at + NSV_DIAG_SPAN) : e;  # 32 bytes after b->at is e itself
 < -> != @ for (i = 0; (i < nd) && (col[i] == '9'); ++i) {  # i counts up from 0 by 1, and nd >= 1
+1 -> 0 @ nsv_diag_bad_after(t, p, 1, b);  # p is at a digit, and partial is only read at a '-' or '+'
+1 -> 2 @ nsv_diag_bad_after(t, p, 1, b);  # p is at a digit, and partial is only read at a '-' or '+'
