@@ -709,7 +709,7 @@ TEST_CASE("nsv::SemVer: comparisons on generated versions") {
     }
   }
   REQUIRE(vs.size() > 300);
-  // Refusals too. At 64 bytes there are few, and how many varies by compiler.
+  // Refusals too, counted at 16 bytes: at 64 there are only a dozen or so.
   REQUIRE(too_big > 50);
   for (size_t i = 0; i < vs.size(); ++i) {
     for (size_t j = i; j < vs.size(); ++j) {

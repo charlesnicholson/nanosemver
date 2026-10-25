@@ -1,8 +1,11 @@
 #include "gen.h"
 
 #include <iterator>
+#include <utility>
 #include <vector>
 
+// At most one draw from the rng per argument list or operator, whose order C++ leaves
+// open: two would make each compiler generate different inputs.
 namespace nsv_fuzz {
 namespace {
 
@@ -45,7 +48,11 @@ std::string alnum(rng &r, std::uint32_t n) {
 
 // Hashes and timestamps, longer than any word list or short alnum.
 std::string long_ident(rng &r) {
-  return r.chance(50) ? alnum(r, 9 + r.below(40)) : digits(r, 9 + r.below(20), r.chance(50));
+  if (r.chance(50)) {
+    return alnum(r, 9 + r.below(40));
+  }
+  std::uint32_t const n = 9 + r.below(20);
+  return digits(r, n, r.chance(50));
 }
 
 std::string pre_ident(rng &r) {
@@ -120,7 +127,12 @@ parts tweak(rng &r, parts p) {
     case 1: p.has_pre = !p.has_pre; if (p.pre.empty()) p.pre.push_back(pre_ident(r)); break;
     case 2: if (!p.pre.empty()) p.pre.pop_back(); else p.has_pre = false; break;
     case 3: p.has_pre = true; p.pre.push_back(pre_ident(r)); break;
-    case 4: if (!p.pre.empty()) p.pre[r.below(static_cast<std::uint32_t>(p.pre.size()))] = pre_ident(r); break;
+    case 4:
+      if (!p.pre.empty()) {
+        std::string id = pre_ident(r);
+        p.pre[r.below(static_cast<std::uint32_t>(p.pre.size()))] = std::move(id);
+      }
+      break;
     case 5: p.has_build = true; p.build.assign(1, build_ident(r)); break;
     default: break;  // identical
   }
@@ -192,7 +204,10 @@ std::string partial_near(rng &r, parts const &p) {
   switch (r.below(12)) {
     case 0: return any(r, wild);
     case 1: return any(r, bad);
-    case 2: return std::string(any(r, wild)) + "." + any(r, wild);
+    case 2: {
+      std::string const s = std::string(any(r, wild)) + ".";
+      return s + any(r, wild);
+    }
     default: break;
   }
   std::string s = r.chance(20) ? bump(p.major, r.chance(50) ? 1 : -1) : p.major;
@@ -304,7 +319,10 @@ std::string gen_version(rng &r) {
 std::string gen_input(rng &r) {
   switch (r.below(6)) {
     case 0: return gen_version(r);
-    case 1: return gen_version(r) + "\n" + gen_version(r);
+    case 1: {
+      std::string const s = gen_version(r) + "\n";
+      return s + gen_version(r);
+    }
     case 2:
     case 3: {
       parts const a = gen_parts(r);

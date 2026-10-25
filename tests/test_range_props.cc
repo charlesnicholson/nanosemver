@@ -154,7 +154,8 @@ std::string next_line(uint64_t major, uint64_t minor, uint64_t patch, size_t k) 
 TEST_CASE("range properties: the flag only takes matches away, and never from a release") {
   nsv_fuzz::rng r(101);
   for (int n = 0; n < 3000; ++n) {
-    std::string const s = render(random_range(r), r.below(256));
+    range const rg = random_range(r);
+    std::string const s = render(rg, r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       nsv_semver_t const &v = pool().v[i];
       int const plain = match(s, v, 0), excl = match(s, v, NSV_RANGE_EXCLUDE_PRE);
@@ -180,7 +181,8 @@ TEST_CASE("range properties: build metadata on the version never matters") {
   }
   versions const built{ with };
   for (int n = 0; n < 2000; ++n) {
-    std::string const s = render(random_range(r), r.below(256));
+    range const rg = random_range(r);
+    std::string const s = render(rg, r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {
         INFO("\"", s, "\" against ", pool().str[i]);
@@ -392,7 +394,8 @@ TEST_CASE("range properties: a set of bounds is an interval of versions") {
 TEST_CASE("range properties: v as a view, a copy, or relocated") {
   nsv_fuzz::rng r(107);
   for (int n = 0; n < 500; ++n) {
-    std::string const s = render(random_range(r), r.below(256));
+    range const rg = random_range(r);
+    std::string const s = render(rg, r.below(256));
     for (size_t i = 0; i < pool().v.size(); ++i) {
       nsv_test::blob const c = nsv_test::copy(pool().v[i]);
       for (unsigned f : { 0u, unsigned(NSV_RANGE_EXCLUDE_PRE) }) {

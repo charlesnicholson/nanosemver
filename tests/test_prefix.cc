@@ -245,7 +245,8 @@ TEST_CASE("nsv_parse_prefix: properties over generated strings") {
       continue;
     }
     if (r.chance(50)) {
-      s += nsv_fuzz::gen_version(r).substr(0, r.below(8));
+      std::string const v = nsv_fuzz::gen_version(r);
+      s += v.substr(0, r.below(8));
     }
     prefix_result const a = parse_prefix(s);
     std::string const pre = s.substr(0, a.consumed);
