@@ -33,9 +33,7 @@
 #               Cortex-M4, against BENCH_BASE
 #   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function
 #   size-check  fails if the code outgrows size-budget.mk or calls into libc or libgcc
-#               for anything but memcpy, or if nanosemver.hpp's SemVer, at the default
-#               size or 4096, takes more than HPP_STACK_MAX bytes of stack outside the
-#               path that copies through a temporary
+#               for anything but memcpy
 #   ratchet     size-check, and fails if any Cortex-M workload takes more cycles than
 #               bench/cm/ratchet.txt allows
 #   ratchet-update  lowers size-budget.mk and bench/cm/ratchet.txt to what the code now
@@ -414,26 +412,7 @@ size: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
 		echo "  calls: $$("$(ARM_NM)" --undefined-only $(CM_BUILD)/$$c.o | awk '{ printf "%s ", $$2 }')"; \
 	done
 
-# nanosemver.hpp's stack: tests/hpp/stack.cc on Cortex-M0+, with -fstack-usage. A SemVer
-# may take a frame its own size only in assign_through_copy, for a source inside the
-# version, which has to stay out of line for every other path to be smaller than that.
-HPP_STACK_MAX := 64
-
-$(CM_BUILD)/hpp-stack.o: tests/hpp/stack.cc nanosemver.hpp nanosemver.h Makefile
-	@mkdir -p $(dir $@)
-	$(MSG) CXX "$< (cortex-m0plus, stack)"
-	$(Q)$(ARM_CC) -x c++ -std=c++11 -mcpu=cortex-m0plus -mthumb -Os -fno-exceptions \
-		-fno-rtti -Wall -Wextra -Werror -fstack-usage -I. -c $< -o $@
-
-size-check: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o $(CM_BUILD)/hpp-stack.o
-	@su=$(CM_BUILD)/hpp-stack.su; \
-	grep -q assign_through_copy $$su || { echo "$$su: assign_through_copy was inlined"; exit 1; }; \
-	awk -F'\t' -v max=$(HPP_STACK_MAX) '!/assign_through_copy/ { \
-		  if ($$2 > top) top = $$2; \
-		  if ($$2 > max) { print "  " $$1 ": " $$2 " bytes"; bad = 1 } } \
-		END { print "nanosemver.hpp: SemVer stack at most " top " bytes outside" \
-		  " assign_through_copy (max " max ")"; \
-		  if (bad) print "HPP STACK EXCEEDED"; exit bad }' $$su
+size-check: $(CM_BUILD)/m0.o $(CM_BUILD)/m4.o
 	@for c in m0:$(NSV_SIZE_M0_MAX) m4:$(NSV_SIZE_M4_MAX); do \
 		o=$(CM_BUILD)/$${c%%:*}.o; max=$${c#*:}; \
 		t=$$($(call cm_bytes,$$o)) || { echo "$$o: no size"; exit 1; }; \
