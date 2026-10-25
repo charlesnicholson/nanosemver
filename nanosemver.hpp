@@ -23,7 +23,7 @@ constexpr bool same(char const *a, char const *b) {
   return (*a == *b) && (!*a || same(a + 1, b + 1));
 }
 
-/* SemVer<N>'s storage: an nsv_copy blob in place, the header and then N bytes for the
+/* SemVerN<N>'s storage: an nsv_copy blob in place, the header and then N bytes for the
    pre-release and build strings and their NULs. */
 template <size_t N>
 struct Copy {
@@ -53,16 +53,9 @@ struct View {
     return NSV_RET_OK;
   }
 };
-}  // namespace detail
 
-/* release.sh stamps this with the release, as it does nanosemver.h's NSV_VERSION, so a
-   nanosemver.hpp only builds against the nanosemver.h it shipped with: the whole version,
-   so not v1.4.0's against v1.4.0-rc.2's. */
-static_assert(detail::same(NSV_VERSION, "0.0.0"),
-              "nanosemver.hpp and nanosemver.h are from different releases");
-
-/* A version over the C API, its strings held as Storage holds them: SemVer<N> and
-   SemVerView below. from and from_prefix make one, with any error in rc and the version
+/* A version over the C API, its strings held as Storage holds them: SemVerN<N>, SemVer
+   and SemVerView, below. from and from_prefix make one, with any error in rc and the version
    0.0.0 on error; replace one by assigning another. A default-constructed version is
    0.0.0. A version is plain bytes: copying it copies them, and there is nothing to free. */
 template <class Storage>
@@ -71,7 +64,7 @@ class SemVerImpl {
   constexpr SemVerImpl() noexcept : s_() {}
 
   /* nsv_parse of s[0, len), or of the NUL-terminated s: rc is NSV_RET_OK, or ERR_ARG /
-     ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, or for a SemVer<N>, ERR_BUF_TOO_SMALL if
+     ERR_SYNTAX / ERR_OVERFLOW / ERR_TOO_LONG, or for a SemVerN<N>, ERR_BUF_TOO_SMALL if
      the version does not fit, or ERR_TOO_LONG where int is 16 bits and its copy is over
      INT_MAX bytes. */
   static SemVerImpl from(char const *s, size_t len, int &rc) noexcept {
@@ -92,7 +85,7 @@ class SemVerImpl {
     return stored(v, rc);
   }
 
-  /* c, as a SemVer<N>'s copy, or a SemVerView's view: rc as from gives it, but for a
+  /* c, as a SemVerN<N>'s copy, or a SemVerView's view: rc as from gives it, but for a
      view, ERR_ARG if c is a copy's header, which does not point at its strings. */
   static SemVerImpl from(nsv_semver_t const &c, int &rc) noexcept {
     rc = NSV_RET_OK;
@@ -104,7 +97,7 @@ class SemVerImpl {
   uint32_t patch() const noexcept { return s_.v.patch; }
 
   /* nsv_get_pre / nsv_get_build: the length, and in s the bytes, or "" if absent.
-     NUL-terminated in a SemVer<N>; in a view, the string's own bytes, so use the length. */
+     NUL-terminated in a SemVerN<N>; in a view, the string's own bytes, so use the length. */
   int pre(char const *&s) const noexcept { return nsv_get_pre(&s_.v, &s); }
   int build(char const *&s) const noexcept { return nsv_get_build(&s_.v, &s); }
 
@@ -120,7 +113,7 @@ class SemVerImpl {
     return matches(range, range ? std::strlen(range) : 0);
   }
 
-  /* The version for the C API. A SemVer<N>'s is a copy's header: pass its address, never
+  /* The version for the C API. A SemVerN<N>'s is a copy's header: pass its address, never
      copy it, as its strings would stay behind. */
   nsv_semver_t const &semver() const noexcept { return s_.v; }
 
@@ -136,16 +129,8 @@ class SemVerImpl {
   Storage s_;
 };
 
-/* A version that owns its strings, N bytes of them in place, 64 by default: it outlives
-   the string it came from. */
-template <size_t N = 64>
-using SemVer = SemVerImpl<detail::Copy<N>>;
-
-/* A version that views the string it came from, which must outlive it: nothing copied,
-   and no length cap. */
-using SemVerView = SemVerImpl<detail::View>;
-
-/* By semver precedence, through nsv_cmp, between any two versions. Build metadata never
+/* By semver precedence, through nsv_cmp, between any two versions. Here, beside
+   SemVerImpl, so that argument-dependent lookup finds them. Build metadata never
    counts, so == is equal precedence, not identity: 1.0.0+a == 1.0.0+b. */
 template <class A, class B>
 bool operator==(SemVerImpl<A> const &a, SemVerImpl<B> const &b) noexcept {
@@ -171,6 +156,26 @@ template <class A, class B>
 bool operator>=(SemVerImpl<A> const &a, SemVerImpl<B> const &b) noexcept {
   return nsv_cmp(&a.semver(), &b.semver()) != NSV_CMP_LT;
 }
+
+}  // namespace detail
+
+/* release.sh stamps this with the release, as it does nanosemver.h's NSV_VERSION, so a
+   nanosemver.hpp only builds against the nanosemver.h it shipped with: the whole version,
+   so not v1.4.0's against v1.4.0-rc.2's. */
+static_assert(detail::same(NSV_VERSION, "0.0.0"),
+              "nanosemver.hpp and nanosemver.h are from different releases");
+
+/* A version that owns its strings, N bytes of them in place: it outlives the string it came
+   from. */
+template <size_t N>
+using SemVerN = detail::SemVerImpl<detail::Copy<N>>;
+
+/* SemVerN at 64 bytes, which hold every version of up to 68 characters. */
+using SemVer = SemVerN<64>;
+
+/* A version that views the string it came from, which must outlive it: nothing copied,
+   and no length cap. */
+using SemVerView = detail::SemVerImpl<detail::View>;
 
 }  // namespace nsv
 
