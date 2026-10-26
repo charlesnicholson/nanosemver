@@ -141,7 +141,7 @@ bool operator>=(SemVerImpl<A> const &a, SemVerImpl<B> const &b) noexcept {
 }  // namespace detail
 
 /* release.sh stamps the literal below as it does NSV_VERSION_LIT, so the two quoted
-   expansions match only within one release. Quoting them needs no C++20. */
+   expansions match only within one release. */
 #define NSV_HPP_STR(...) #__VA_ARGS__  // variadic: the expansion has commas
 #define NSV_HPP_QUOTE(...) NSV_HPP_STR(__VA_ARGS__)
 static_assert(detail::same(NSV_HPP_QUOTE(NSV_VERSION_LIT),

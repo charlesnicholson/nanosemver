@@ -140,8 +140,7 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
   takes an `nsv_semver_t`: a `SemVerInplace<N>` copies any, a view, copy or literal, and a
   `SemVerView` views a view or literal, but not a copy, whose header does not point at
   its strings (`NSV_RET_ERR_ARG`). Each makes a new version, with its error in `rc` and
-  `0.0.0` on error. (`NSV_SEMVER_LIT` itself needs C++20 in C++, for its designated
-  initializers.)
+  `0.0.0` on error.
 - Each returns a temporary, which C++17 requires, and older compilers choose, to build in
   the variable it initializes, so a `SemVerInplace<N>` takes no stack for its `N` bytes.
   To replace a version, assign it another: that builds the new one first and copies it
