@@ -60,7 +60,7 @@ typedef struct nsv_semver {
    by concatenation). Contents are not validated: round-trip through nsv_format and
    nsv_parse in a test. */
 #define NSV_SEMVER_LIT(MAJOR, MINOR, PATCH, PRE, BUILD) { \
-  (MAJOR), (MINOR), (PATCH), PRE "\0" BUILD, /* by position: C++11 has no .field = */ \
+  (MAJOR), (MINOR), (PATCH), PRE "\0" BUILD, \
   0, sizeof(PRE) - 1, sizeof(PRE), sizeof(BUILD) - 1 }
 
 /* This header's release, stamped from its tag (0.0.0 unreleased), as an NSV_SEMVER_LIT:
