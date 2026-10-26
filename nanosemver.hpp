@@ -21,49 +21,45 @@ constexpr bool same(char const *a, char const *b) {  // only for the static_asse
   return (*a == *b) && (!*a || same(a + 1, b + 1));
 }
 
-// nsv_parse, or with consumed, nsv_parse_prefix. Either leaves *out as it was on error.
-inline int parse(nsv_semver_t *out, char const *s, size_t len, size_t *consumed) noexcept {
-  return consumed ? nsv_parse_prefix(out, s, len, consumed) : nsv_parse(out, s, len);
-}
-
+/* The storages. A parse writes to into(view), then keep(rc, view) finishes the version;
+   store(c) makes one of c. Each sets only what is read, and 0.0.0 on error. */
 template <size_t N>
 struct Copy {  // SemVerInplace's storage: the header, then N bytes for both strings
   static_assert(N >= 2, "the pre-release and build strings' NULs need 2 bytes");
   nsv_semver_t v;
-  char s[N];
+  char s[N];  // past the strings, left as it was: never read
 
-  int store(nsv_semver_t const &from) noexcept {
+  nsv_semver_t *into(nsv_semver_t &view) noexcept { return &view; }  // a view, copied in
+
+  int keep(int rc, nsv_semver_t const &view) noexcept {
     static_assert(offsetof(Copy, s) == sizeof(nsv_semver_t), "strings after the header");
     // Up to the array's end, not sizeof *this: copying *this may skip tail padding.
-    int const n = nsv_copy(this, sizeof(nsv_semver_t) + N, &from);
+    int const n = (rc == NSV_RET_OK) ? nsv_copy(this, sizeof(nsv_semver_t) + N, &view) : rc;
+    if (n < 0) {
+      v = nsv_semver_t();  // nsv_copy wrote nothing
+    }
     return (n < 0) ? n : NSV_RET_OK;
   }
-
-  int parse(char const *str, size_t len, size_t *consumed) noexcept {
-    *this = Copy();  // 0.0.0 on error, and no byte left undefined
-    nsv_semver_t view;  // read only once parsed
-    int const rc = detail::parse(&view, str, len, consumed);
-    return (rc == NSV_RET_OK) ? store(view) : rc;
-  }
+  int store(nsv_semver_t const &from) noexcept { return keep(NSV_RET_OK, from); }
 };
 
 struct View {  // SemVerView's storage: a header pointing into the parsed string
   nsv_semver_t v;
 
-  int store(nsv_semver_t const &from) noexcept {
-    if (!from.src && (from.pre_len || from.build_len)) {  // a copy: no pointer to view
-      return NSV_RET_ERR_ARG;
-    }
-    v = from;
-    return NSV_RET_OK;
-  }
+  nsv_semver_t *into(nsv_semver_t &) noexcept { return &v; }  // straight into v
 
-  int parse(char const *str, size_t len, size_t *consumed) noexcept {  // straight into v
-    int const rc = detail::parse(&v, str, len, consumed);
+  int keep(int rc, nsv_semver_t const &) noexcept {
     if (rc != NSV_RET_OK) {
       v = nsv_semver_t();  // zeroed here, not first: free if the caller drops it on error
     }
     return rc;
+  }
+  int store(nsv_semver_t const &from) noexcept {
+    if (!from.src && (from.pre_len || from.build_len)) {  // a copy: no pointer to view
+      return keep(NSV_RET_ERR_ARG, from);
+    }
+    v = from;
+    return NSV_RET_OK;
   }
 };
 
@@ -77,7 +73,7 @@ class SemVerImpl {
   /* nsv_parse of s[0, len), or of the NUL-terminated s. rc is nsv_parse's, or for a
      SemVerInplace, nsv_copy's: ERR_BUF_TOO_SMALL if it does not fit, or ERR_TOO_LONG. */
   static SemVerImpl from(char const *s, size_t len, int &rc) noexcept {
-    return SemVerImpl(s, len, nullptr, rc);  // built in the caller's variable in C++17
+    return SemVerImpl(s, len, rc);  // built in the caller's variable, as C++17 requires
   }
   static SemVerImpl from(char const *s, int &rc) noexcept {
     return from(s, s ? strlen(s) : 0, rc);  // NULL is nsv_parse's ERR_ARG
@@ -86,7 +82,7 @@ class SemVerImpl {
   // nsv_parse_prefix of s[0, len): consumed as it sets it, and rc as from() gives it.
   static SemVerImpl from_prefix(char const *s, size_t len, size_t &consumed,
                                 int &rc) noexcept {
-    return SemVerImpl(s, len, &consumed, rc);
+    return SemVerImpl(s, len, consumed, rc);
   }
 
   /* c copied (SemVerInplace) or viewed (SemVerView). rc is nsv_copy's, or for a view,
@@ -117,12 +113,18 @@ class SemVerImpl {
   nsv_semver_t const &semver() const noexcept { return s_.v; }
 
  private:
-  SemVerImpl(char const *s, size_t len, size_t *consumed, int &rc) noexcept {
-    rc = s_.parse(s, len, consumed);  // fills all of s_, 0.0.0 on error
+  // s_ is left to the storage. A new version, so it never overlaps s or c.
+  SemVerImpl(char const *s, size_t len, int &rc) noexcept {
+    nsv_semver_t view;
+    int const r = nsv_parse(s_.into(view), s, len);
+    rc = s_.keep(r, view);
   }
-  SemVerImpl(nsv_semver_t const &v, int &rc) noexcept : s_() {  // new, so never overlaps v
-    rc = s_.store(v);
+  SemVerImpl(char const *s, size_t len, size_t &consumed, int &rc) noexcept {
+    nsv_semver_t view;
+    int const r = nsv_parse_prefix(s_.into(view), s, len, &consumed);
+    rc = s_.keep(r, view);
   }
+  SemVerImpl(nsv_semver_t const &c, int &rc) noexcept { rc = s_.store(c); }
 
   Storage s_;
 };

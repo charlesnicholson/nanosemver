@@ -143,12 +143,13 @@ nsv::SemVer const kept = nsv::SemVer::from(v.semver(), rc);  // a copy, to outli
   `0.0.0` on error.
 - Each returns a temporary, which C++17 requires, and older compilers choose, to build in
   the variable it initializes, so a `SemVerInplace<N>` takes no stack for its `N` bytes,
-  and a `SemVerView` is parsed straight into it, for no more code than the C API takes.
-  To replace a version, assign it another: that builds the new one first and copies it
-  over, so it does take the version's size in stack.
+  and a `SemVerView` is parsed straight into it: either takes no more code than the same
+  through the C API. To replace a version, assign it another: that builds the new one
+  first and copies it over, so it does take the version's size in stack, and a copy.
 - `N` bytes hold the pre-release, the build metadata and a NUL after each, laid out as
   `nsv_copy` lays them out, so every version of up to `N + 4` characters fits, and a
-  longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`. A
+  longer one does if its strings do; one that does not is `NSV_RET_ERR_BUF_TOO_SMALL`.
+  Bytes past the strings are left as they were, as `nsv_copy` leaves them. A
   `SemVerInplace<N>` is `sizeof(nsv_semver_t) + N` bytes, rounded up to the header's alignment,
   so a `SemVer` is 96 on 64-bit targets and 88 on 32-bit ones. A `SemVerView` is the
   header.
@@ -413,7 +414,7 @@ through [envy](https://github.com/envy-package-manager/envy) on first use; pass
 | `make libfuzzer` | libFuzzer with ASan and UBSan, with `-DNSV_DIAG=1` (Linux clang; Apple clang ships no libFuzzer) |
 | `make bench BENCH_ARGS=--quick` | host timings against `BENCH_BASE`; `--filter cmp` picks workloads |
 | `make bench-cm` | emulated Cortex-M0+ and Cortex-M4 instruction counts and cycles against `BENCH_BASE` |
-| `make size size-check` | Cortex-M size, code, data and strings, with and without `NSV_DIAG`, and the budget and `memcpy`-only checks, and that `nsv::SemVerView` takes no more code than the C API |
+| `make size size-check` | Cortex-M size, code, data and strings, with and without `NSV_DIAG`, and the budget and `memcpy`-only checks, and that `nanosemver.hpp` takes no more code than the C API |
 | `make ratchet` / `make ratchet-update` | Cortex-M code size and cycles held to `size-budget.mk` and `bench/cm/ratchet.txt` / lowered to the code's |
 | `make npm-check NPM_ARGS="1000000 7"` | `nsv_range_match` against npm's semver package: generated ranges, and a seed |
 | `make mutate MUTATE_ARGS="--jobs 8 --shard 0/4"` | mutation testing: fails on any change to `nanosemver.c` the unit tests miss, unless `tests/mutate-equivalent.txt` explains why it changes nothing |

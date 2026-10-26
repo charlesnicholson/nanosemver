@@ -36,7 +36,7 @@
 #   size        Cortex-M0+ and Cortex-M4 code size at -Os, function by function, and
 #               in all with -DNSV_DIAG=1
 #   size-check  fails if the code, with or without NSV_DIAG, outgrows size-budget.mk or
-#               calls into libc or libgcc for anything but memcpy, or if nsv::SemVerView
+#               calls into libc or libgcc for anything but memcpy, or if nanosemver.hpp
 #               takes more code than the same through the C API
 #   ratchet     size-check, and fails if any Cortex-M workload takes more cycles than
 #               bench/cm/ratchet.txt allows
@@ -404,20 +404,20 @@ $(CM_BUILD)/m0-diag.o $(CM_BUILD)/m4-diag.o: $(CM_BUILD)/%-diag.o: nanosemver.c 
 	$(MSG) CC "$< ($(call cm_cpu,$*), diag)"
 	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) $(DIAG_DEFS) -I. -c $< -o $@
 
-# nsv::SemVerView against the same calls through the C API, tests/hpp/view_size.c(c). The
-# C++ as C++11, its oldest, and without exceptions, RTTI or C++ headers.
+# nanosemver.hpp against the same calls through the C API, tests/hpp/size.c(c). The C++
+# as C++11, its oldest, and without exceptions, RTTI or C++ headers.
 CM_CXX_FLAGS := -mthumb -Os -std=c++11 -fno-exceptions -fno-rtti -nostdinc++ -Wall -Wextra \
 	-Werror -Wconversion -Wsign-conversion
-VIEW_OBJS := $(foreach c,m0 m4,$(CM_BUILD)/view-$(c)-c.o $(CM_BUILD)/view-$(c)-cc.o)
+HPP_CM_OBJS := $(foreach c,m0 m4,$(CM_BUILD)/hpp-$(c)-c.o $(CM_BUILD)/hpp-$(c)-cc.o)
 
-$(CM_BUILD)/view-m0-c.o $(CM_BUILD)/view-m4-c.o: $(CM_BUILD)/view-%-c.o: \
-		tests/hpp/view_size.c nanosemver.h Makefile
+$(CM_BUILD)/hpp-m0-c.o $(CM_BUILD)/hpp-m4-c.o: $(CM_BUILD)/hpp-%-c.o: \
+		tests/hpp/size.c nanosemver.h Makefile
 	@mkdir -p $(dir $@)
 	$(MSG) CC "$< ($(call cm_cpu,$*))"
 	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_FLAGS) -I. -c $< -o $@
 
-$(CM_BUILD)/view-m0-cc.o $(CM_BUILD)/view-m4-cc.o: $(CM_BUILD)/view-%-cc.o: \
-		tests/hpp/view_size.cc nanosemver.hpp nanosemver.h Makefile
+$(CM_BUILD)/hpp-m0-cc.o $(CM_BUILD)/hpp-m4-cc.o: $(CM_BUILD)/hpp-%-cc.o: \
+		tests/hpp/size.cc nanosemver.hpp nanosemver.h Makefile
 	@mkdir -p $(dir $@)
 	$(MSG) CXX "$< ($(call cm_cpu,$*))"
 	$(Q)$(ARM_CC) -mcpu=$(call cm_cpu,$*) $(CM_CXX_FLAGS) -I. -c $< -o $@
@@ -467,7 +467,7 @@ size: $(CM_OBJS)
 		echo "  $$($(call cm_bytes,$(CM_BUILD)/$$c-diag.o)) total with $(DIAG_DEFS)"; \
 	done
 
-size-check: $(CM_OBJS) $(VIEW_OBJS)
+size-check: $(CM_OBJS) $(HPP_CM_OBJS)
 	@for c in m0:$(NSV_SIZE_M0_MAX) m4:$(NSV_SIZE_M4_MAX) m0-diag:$(NSV_SIZE_M0_DIAG_MAX) \
 			m4-diag:$(NSV_SIZE_M4_DIAG_MAX); do \
 		o=$(CM_BUILD)/$${c%%:*}.o; max=$${c#*:}; \
@@ -479,11 +479,11 @@ size-check: $(CM_OBJS) $(VIEW_OBJS)
 		if [ -n "$$u" ]; then echo "$$o calls more than memcpy:"; echo "$$u"; exit 1; fi; \
 	done
 	@for c in m0 m4; do \
-		o=$(CM_BUILD)/view-$$c-cc.o; \
+		o=$(CM_BUILD)/hpp-$$c-cc.o; \
 		t=$$($(call cm_bytes,$$o)) || { echo "$$o: no size"; exit 1; }; \
-		max=$$($(call cm_bytes,$(CM_BUILD)/view-$$c-c.o)) || exit 1; \
+		max=$$($(call cm_bytes,$(CM_BUILD)/hpp-$$c-c.o)) || exit 1; \
 		echo "$$o: $$t bytes (the C API's $$max)"; \
-		if [ $$t -gt $$max ]; then echo "SemVerView OUTGREW THE C API"; exit 1; fi; \
+		if [ $$t -gt $$max ]; then echo "nanosemver.hpp OUTGREW THE C API"; exit 1; fi; \
 	done
 
 # The ratchet: code size (size-budget.mk) and Cortex-M cycles per call, workload by
