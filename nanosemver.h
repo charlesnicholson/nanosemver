@@ -54,16 +54,14 @@ typedef struct nsv_semver {
   uint16_t build_ofs, build_len;
 } nsv_semver_t;
 
-/* Static initializer from literals, e.g. for build stamping:
+/* Static initializer from literals, in C99 or C++11, e.g. for build stamping:
      static nsv_semver_t const k_ver = NSV_SEMVER_LIT(1, 4, 0, "rc.2", "g3f9a1c2");
    Use "" for absent pre-release / build. PRE and BUILD must be string literals (enforced
    by concatenation). Contents are not validated: round-trip through nsv_format and
    nsv_parse in a test. */
 #define NSV_SEMVER_LIT(MAJOR, MINOR, PATCH, PRE, BUILD) { \
-  .major = (MAJOR), .minor = (MINOR), .patch = (PATCH), \
-  .src = PRE "\0" BUILD, \
-  .pre_ofs = 0, .pre_len = sizeof(PRE) - 1, \
-  .build_ofs = sizeof(PRE), .build_len = sizeof(BUILD) - 1 }
+  (MAJOR), (MINOR), (PATCH), PRE "\0" BUILD, /* by position: C++11 has no .field = */ \
+  0, sizeof(PRE) - 1, sizeof(PRE), sizeof(BUILD) - 1 }
 
 /* This header's release, stamped from its tag (0.0.0 unreleased), as an NSV_SEMVER_LIT:
    nsv_semver_t const v = NSV_VERSION_LIT; makes an nsv_semver_t of it, to compare. */
