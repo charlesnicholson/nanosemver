@@ -133,6 +133,8 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      # MSan re-execs with ASLR off when the layout clashes; Docker's seccomp blocks that.
+      options: --security-opt seccomp=unconfined
     strategy:
       fail-fast: false
       matrix:
